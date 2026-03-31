@@ -1,0 +1,44 @@
+"""
+<< project_name >> — MCP Server
+"""
+
+import logging
+from fastmcp import FastMCP
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+log = logging.getLogger(__name__)
+
+mcp = FastMCP(
+    "<< project_name >>",
+    instructions="<< description >>",
+)
+
+
+@mcp.tool()
+def hello(name: str = "world") -> str:
+    """Say hello. Replace this with your own tools.
+
+    Args:
+        name: Who to greet.
+    """
+    return f"Hello, {name}! This is << project_name >>."
+
+
+# Add more tools here:
+#
+# @mcp.tool()
+# def my_tool(param: str) -> str:
+#     """Description of what this tool does."""
+#     return "result"
+
+
+def main():
+    """CLI entrypoint for << project_slug >>-mcp."""
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

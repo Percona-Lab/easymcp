@@ -1,0 +1,47 @@
+# << project_name >>
+
+<< description >>
+
+## Quick start
+
+<% if language == "python" %>
+```bash
+uv venv && uv pip install -e .
+.venv/bin/<< project_slug >>-mcp
+```
+<% else %>
+```bash
+npm install
+node src/mcp-server.js
+```
+<% endif %>
+
+## MCP Client Configuration
+
+Add to your MCP client config:
+
+```json
+{
+  "<< project_slug >>": {
+<% if language == "python" %>
+    "command": "/path/to/<< project_slug >>/.venv/bin/python",
+    "args": ["-m", "<< package_name >>.mcp_server"]
+<% else %>
+    "command": "node",
+    "args": ["/path/to/<< project_slug >>/src/mcp-server.js"]
+<% endif %>
+  }
+}
+```
+
+## Adding tools
+
+<% if language == "python" %>
+Edit `src/<< package_name >>/mcp_server.py` and add new `@mcp.tool()` decorated functions.
+<% else %>
+Edit `src/mcp-server.js` and add new tool definitions and handlers.
+<% endif %>
+
+## License
+
+<< license >>

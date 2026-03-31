@@ -1,0 +1,83 @@
+#!/usr/bin/env node
+/**
+ * << project_name >> — MCP Server
+ *
+ * Exposes << service_name >> API operations as MCP tools.
+ */
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { config } from "dotenv";
+
+config({ path: process.env.DOTENV_PATH || ".env" });
+
+<% for tool in tools %>
+import { << tool.name >> } from "./connector.js";
+<% endfor %>
+
+const server = new Server(
+  { name: "<< project_name >>", version: "0.1.0" },
+  { capabilities: { tools: {} } }
+);
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+<% for tool in tools %>
+    {
+      name: "<< tool.name >>",
+      description: "<< tool.description >>",
+      inputSchema: {
+        type: "object",
+        properties: {
+          // TODO: Define input parameters for << tool.name >>
+        },
+        required: [],
+      },
+    },
+<% endfor %>
+  ],
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  try {
+    let result;
+    switch (name) {
+<% for tool in tools %>
+      case "<< tool.name >>":
+        result = await << tool.name >>(args);
+        break;
+<% endfor %>
+      default:
+        return {
+          content: [{ type: "text", text: `Unknown tool: ${name}` }],
+          isError: true,
+        };
+    }
+
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  } catch (err) {
+    return {
+      content: [{ type: "text", text: `Error: ${err.message}` }],
+      isError: true,
+    };
+  }
+});
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("<< project_name >> MCP server running on stdio");
+}
+
+main().catch((err) => {
+  console.error("Fatal:", err);
+  process.exit(1);
+});

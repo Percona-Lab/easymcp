@@ -1,19 +1,19 @@
-"""easyMCP CLI - scaffold production-ready MCP server projects."""
+"""CAIRN CLI — scaffold production-ready MCP server projects."""
 
 import sys
 from pathlib import Path
 
 import click
 
-from easymcp import __version__
-from easymcp.prompts import run_prompts, c, info, error, BOLD
-from easymcp.scaffold import scaffold
+from cairn import __version__
+from cairn.prompts import run_prompts, c, info, error, BOLD
+from cairn.scaffold import scaffold
 
 
 @click.group()
-@click.version_option(__version__, prog_name="easymcp")
+@click.version_option(__version__, prog_name="cairn")
 def main():
-    """easyMCP - Scaffold production-ready MCP servers with polished installers."""
+    """CAIRN — Create Any Integration, Run Naturally. Scaffold production-ready MCP servers."""
     pass
 
 

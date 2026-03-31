@@ -1,0 +1,17 @@
+[project]
+name = "<< project_slug >>"
+version = "0.1.0"
+description = "<< description >>"
+readme = "README.md"
+license = {text = "<< license >>"}
+requires-python = ">=3.11"
+dependencies = [
+    "fastmcp>=2.0",
+]
+
+[project.scripts]
+<< project_slug >>-mcp = "<< package_name >>.mcp_server:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"

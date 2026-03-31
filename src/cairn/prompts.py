@@ -1,4 +1,4 @@
-"""Interactive prompt helpers for easyMCP scaffolding."""
+"""Interactive prompt helpers for CAIRN scaffolding."""
 
 import re
 import subprocess
@@ -74,7 +74,7 @@ def ask_choice(prompt: str, options: list[str], default: int = 0) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Data source prompts
+# Project type: doc-search prompts
 # ---------------------------------------------------------------------------
 
 def ask_data_source() -> dict | None:
@@ -138,9 +138,118 @@ def ask_data_source_stacks() -> list[dict]:
     return stacks
 
 
+def _prompts_doc_search(config: dict) -> None:
+    """Collect doc-search specific config."""
+    stacks = ask_data_source_stacks()
+
+    if not stacks:
+        warn("No stacks defined. Adding an example stack you can customize later.")
+        stacks = [
+            {
+                "name": "Documentation",
+                "sources": [
+                    {
+                        "slug": "example/docs",
+                        "name": "Example Docs",
+                        "keywords": ["docs", "documentation"],
+                        "fallback_doc_count": 50,
+                    }
+                ],
+            }
+        ]
+
+    print(f"\n{c(BOLD, 'Auto-refresh')}")
+    refresh_raw = ask("Default doc update interval in days (0 to disable)", default="7")
+    try:
+        refresh_days = int(refresh_raw)
+    except ValueError:
+        refresh_days = 7
+
+    config["stacks"] = stacks
+    config["all_sources"] = [s for stack in stacks for s in stack["sources"]]
+    config["refresh_days"] = refresh_days
+
+
+# ---------------------------------------------------------------------------
+# Project type: api-integration prompts
+# ---------------------------------------------------------------------------
+
+def _ask_tool() -> dict | None:
+    """Prompt user to define one MCP tool. Returns dict or None to stop."""
+    print()
+    name = ask("Tool name (snake_case, or empty to finish)")
+    if not name:
+        return None
+
+    description = ask("Description", default=f"TODO: describe {name}")
+    return {"name": name, "description": description}
+
+
+def _prompts_api_integration(config: dict) -> None:
+    """Collect API integration specific config."""
+    print(f"\n{c(BOLD, 'API Service')}")
+    service_name = ask("Service name (e.g. Slack, Jira, Stripe)", default="MyService")
+    base_url = ask("Base URL", default="https://api.example.com")
+
+    print(f"\n{c(BOLD, 'Authentication')}")
+    auth_idx = ask_choice("Auth method", [
+        "Bearer token (API key in header)",
+        "Basic auth (username + password)",
+        "OAuth 2.0 (client credentials)",
+        "Custom (you'll implement it)",
+    ], default=0)
+    auth_methods = ["bearer", "basic", "oauth2", "custom"]
+    auth_method = auth_methods[auth_idx]
+
+    print(f"\n{c(BOLD, 'MCP Tools')}")
+    print(f"  {DIM}Define the tools your MCP server will expose.{NC}")
+    print(f"  {DIM}Each tool wraps an API call. You can add more later.{NC}")
+    tools: list[dict] = []
+    while True:
+        tool = _ask_tool()
+        if tool is None:
+            break
+        tools.append(tool)
+
+    if not tools:
+        warn("No tools defined. Adding example tools you can customize later.")
+        tools = [
+            {"name": "list_items", "description": f"List items from {service_name}"},
+            {"name": "get_item", "description": f"Get a single item from {service_name} by ID"},
+        ]
+
+    config["service_name"] = service_name
+    config["service_slug"] = re.sub(r"[^a-z0-9]+", "_", service_name.lower()).strip("_")
+    config["base_url"] = base_url
+    config["auth_method"] = auth_method
+    config["tools"] = tools
+
+
+# ---------------------------------------------------------------------------
+# Project type: starter prompts
+# ---------------------------------------------------------------------------
+
+def _prompts_starter(config: dict) -> None:
+    """Starter type needs no extra config."""
+    pass
+
+
 # ---------------------------------------------------------------------------
 # Full project prompt flow
 # ---------------------------------------------------------------------------
+
+PROJECT_TYPES = [
+    ("api-integration", "API integration — wrap an external REST API as MCP tools"),
+    ("doc-search", "Doc search — semantic search over GitHub repos with Markdown docs"),
+    ("starter", "Starter — minimal MCP server with one example tool"),
+]
+
+_TYPE_PROMPTS = {
+    "doc-search": _prompts_doc_search,
+    "api-integration": _prompts_api_integration,
+    "starter": _prompts_starter,
+}
+
 
 def _git_user() -> str:
     """Try to get git user name."""
@@ -170,8 +279,14 @@ def run_prompts() -> dict:
     """Run the full interactive prompt flow. Returns project config dict."""
     print()
     print(c(BOLD, "=" * 60))
-    print(c(BOLD, " easyMCP - Create a new MCP server project"))
+    print(c(BOLD, " CAIRN — Create Any Integration, Run Naturally"))
     print(c(BOLD, "=" * 60))
+    print()
+
+    # Project type
+    print(c(BOLD, "What kind of MCP server?"))
+    type_idx = ask_choice("Type", [t[1] for t in PROJECT_TYPES], default=0)
+    project_type = PROJECT_TYPES[type_idx][0]
     print()
 
     # Project basics
@@ -179,73 +294,55 @@ def run_prompts() -> dict:
     name = ask("Project name", default="my-mcp-server")
     slug = _slugify(name)
     package_name = _to_package_name(slug)
-
     description = ask("Description", default=f"MCP server for {name}")
 
     # Language
     print(f"\n{c(BOLD, 'Language')}")
-    lang_idx = ask_choice("Language", ["Python (FastMCP + ChromaDB)", "Node.js (@modelcontextprotocol/sdk)"], default=0)
+    if project_type == "api-integration":
+        lang_options = ["Python (FastMCP)", "Node.js (@modelcontextprotocol/sdk)"]
+    elif project_type == "doc-search":
+        lang_options = ["Python (FastMCP + ChromaDB)", "Node.js (@modelcontextprotocol/sdk + ChromaDB)"]
+    else:
+        lang_options = ["Python (FastMCP)", "Node.js (@modelcontextprotocol/sdk)"]
+    lang_idx = ask_choice("Language", lang_options, default=0)
     language = "python" if lang_idx == 0 else "nodejs"
 
     # GitHub
     print(f"\n{c(BOLD, 'Repository')}")
     github_url = ask("GitHub repo URL (where this project will live)", default=f"https://github.com/YOUR_ORG/{slug}")
 
-    # Data sources
-    stacks = ask_data_source_stacks()
-
-    if not stacks:
-        warn("No stacks defined. Adding an example stack you can customize later.")
-        stacks = [
-            {
-                "name": "Documentation",
-                "sources": [
-                    {
-                        "slug": "example/docs",
-                        "name": "Example Docs",
-                        "keywords": ["docs", "documentation"],
-                        "fallback_doc_count": 50,
-                    }
-                ],
-            }
-        ]
-
-    # Auto-refresh
-    print(f"\n{c(BOLD, 'Auto-refresh')}")
-    refresh_raw = ask("Default doc update interval in days (0 to disable)", default="7")
-    try:
-        refresh_days = int(refresh_raw)
-    except ValueError:
-        refresh_days = 7
-
     # Author
     author = ask("Author", default=_git_user())
 
-    # Build all repos list and fallback counts
-    all_sources = [s for stack in stacks for s in stack["sources"]]
-
     config = {
+        "project_type": project_type,
         "project_name": name,
         "project_slug": slug,
         "package_name": package_name,
         "description": description,
         "language": language,
         "github_repo_url": github_url,
-        "stacks": stacks,
-        "all_sources": all_sources,
-        "refresh_days": refresh_days,
         "author": author,
         "license": "MIT",
     }
 
+    # Type-specific prompts
+    _TYPE_PROMPTS[project_type](config)
+
     # Review
     print(f"\n{c(BOLD, 'Review')}")
+    print(f"  Type:        {project_type}")
     print(f"  Project:     {name} ({slug})")
     print(f"  Language:    {language}")
     print(f"  Description: {description}")
     print(f"  GitHub:      {github_url}")
-    print(f"  Stacks:      {len(stacks)} ({sum(len(s['sources']) for s in stacks)} repos)")
-    print(f"  Refresh:     every {refresh_days} days")
+    if project_type == "doc-search":
+        stacks = config.get("stacks", [])
+        print(f"  Stacks:      {len(stacks)} ({sum(len(s['sources']) for s in stacks)} repos)")
+        print(f"  Refresh:     every {config.get('refresh_days', 7)} days")
+    elif project_type == "api-integration":
+        print(f"  Service:     {config.get('service_name')} ({config.get('auth_method')})")
+        print(f"  Tools:       {len(config.get('tools', []))}")
     print(f"  Author:      {author}")
     print()
 

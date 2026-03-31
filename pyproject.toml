@@ -3,16 +3,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "easymcp"
-version = "0.1.0"
-description = "Scaffold production-ready MCP servers with polished cross-platform installers"
+name = "cairn-mcp"
+version = "0.2.0"
+description = "CAIRN — Create Any Integration, Run Naturally. Scaffold production-ready MCP servers."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [
     { name = "Percona", email = "info@percona.com" },
 ]
-keywords = ["mcp", "model-context-protocol", "scaffolding", "cli", "ai-tools"]
+keywords = ["mcp", "model-context-protocol", "scaffolding", "cli", "ai-tools", "cairn"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -28,18 +28,18 @@ dependencies = [
 ]
 
 [project.scripts]
-easymcp = "easymcp.cli:main"
+cairn = "cairn.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Percona-Lab/easymcp"
-Repository = "https://github.com/Percona-Lab/easymcp"
-Issues = "https://github.com/Percona-Lab/easymcp/issues"
+Homepage = "https://github.com/Percona-Lab/CAIRN"
+Repository = "https://github.com/Percona-Lab/CAIRN"
+Issues = "https://github.com/Percona-Lab/CAIRN/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/easymcp"]
+packages = ["src/cairn"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"templates" = "easymcp/templates"
+"templates" = "cairn/templates"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/easymcp", "templates", "README.md", "LICENSE"]
+include = ["src/cairn", "templates", "README.md", "LICENSE"]

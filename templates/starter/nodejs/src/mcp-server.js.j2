@@ -1,0 +1,70 @@
+#!/usr/bin/env node
+/**
+ * << project_name >> — MCP Server
+ */
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+
+const server = new Server(
+  { name: "<< project_name >>", version: "0.1.0" },
+  { capabilities: { tools: {} } }
+);
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: "hello",
+      description: "Say hello. Replace this with your own tools.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: {
+            type: "string",
+            description: "Who to greet.",
+            default: "world",
+          },
+        },
+      },
+    },
+    // Add more tools here
+  ],
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name: toolName, arguments: args } = request.params;
+
+  switch (toolName) {
+    case "hello": {
+      const who = args.name || "world";
+      return {
+        content: [
+          { type: "text", text: `Hello, ${who}! This is << project_name >>.` },
+        ],
+      };
+    }
+
+    // Add more tool handlers here
+
+    default:
+      return {
+        content: [{ type: "text", text: `Unknown tool: ${toolName}` }],
+        isError: true,
+      };
+  }
+});
+
+async function main() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("<< project_name >> MCP server running on stdio");
+}
+
+main().catch((err) => {
+  console.error("Fatal:", err);
+  process.exit(1);
+});

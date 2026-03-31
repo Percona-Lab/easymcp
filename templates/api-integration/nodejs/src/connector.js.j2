@@ -1,0 +1,65 @@
+/**
+ * << project_name >> — << service_name >> Connector
+ *
+ * API client for << service_name >>. Handles authentication and HTTP calls.
+ * Each public method maps to one MCP tool.
+ */
+
+import { config } from "dotenv";
+config({ path: process.env.DOTENV_PATH || ".env" });
+
+const BASE_URL = (process.env.<< service_slug | upper >>_BASE_URL || "<< base_url >>").replace(/\/$/, "");
+<% if auth_method == "bearer" %>
+const API_KEY = process.env.<< service_slug | upper >>_API_KEY || "";
+<% elif auth_method == "basic" %>
+const USERNAME = process.env.<< service_slug | upper >>_USERNAME || "";
+const PASSWORD = process.env.<< service_slug | upper >>_PASSWORD || "";
+<% elif auth_method == "oauth2" %>
+const CLIENT_ID = process.env.<< service_slug | upper >>_CLIENT_ID || "";
+const CLIENT_SECRET = process.env.<< service_slug | upper >>_CLIENT_SECRET || "";
+const TOKEN_URL = process.env.<< service_slug | upper >>_TOKEN_URL || "<< base_url >>/oauth/token";
+<% else %>
+const API_KEY = process.env.<< service_slug | upper >>_API_KEY || "";
+<% endif %>
+
+function authHeaders() {
+<% if auth_method == "bearer" %>
+  return { Authorization: `Bearer ${API_KEY}` };
+<% elif auth_method == "basic" %>
+  const creds = Buffer.from(`${USERNAME}:${PASSWORD}`).toString("base64");
+  return { Authorization: `Basic ${creds}` };
+<% elif auth_method == "oauth2" %>
+  // TODO: Implement OAuth token fetching from TOKEN_URL
+  return { Authorization: "Bearer TODO_FETCH_TOKEN" };
+<% else %>
+  // TODO: Implement your authentication
+  return { Authorization: `Bearer ${API_KEY}` };
+<% endif %>
+}
+
+async function request(method, path, options = {}) {
+  const url = `${BASE_URL}${path}`;
+  const resp = await fetch(url, {
+    method,
+    headers: {
+      "Content-Type": "application/json",
+      ...authHeaders(),
+      ...options.headers,
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
+  if (!resp.ok) {
+    throw new Error(`${method} ${path} failed: ${resp.status} ${resp.statusText}`);
+  }
+  return resp.json();
+}
+
+<% for tool in tools %>
+export async function << tool.name >>(args = {}) {
+  // << tool.description >>
+  // TODO: Implement API call
+  // Example: return request("GET", "/endpoint", { params: args });
+  return { status: "not_implemented", tool: "<< tool.name >>" };
+}
+
+<% endfor %>

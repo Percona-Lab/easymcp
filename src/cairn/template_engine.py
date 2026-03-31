@@ -15,7 +15,7 @@ def _find_templates_dir() -> Path:
 
     # Installed: look in package data
     try:
-        ref = importlib.resources.files("easymcp") / "templates"
+        ref = importlib.resources.files("cairn") / "templates"
         installed_path = Path(str(ref))
         if installed_path.is_dir():
             return installed_path
@@ -23,7 +23,7 @@ def _find_templates_dir() -> Path:
         pass
 
     raise FileNotFoundError(
-        "Cannot find easyMCP templates directory. "
+        "Cannot find CAIRN templates directory. "
         "Expected at: " + str(dev_path)
     )
 
