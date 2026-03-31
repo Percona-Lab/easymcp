@@ -1,0 +1,8 @@
+{
+  "name": "cairn",
+  "version": "0.2.0",
+  "author": {"name": "Percona Lab"},
+  "description": "CAIRN — Create Any Integration, Run Naturally. Scaffold production-ready MCP servers for any domain.",
+  "repository": "https://github.com/Percona-Lab/CAIRN",
+  "license": "MIT"
+}
