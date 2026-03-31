@@ -1,33 +1,53 @@
 # easyMCP
 
-Scaffold production-ready MCP servers with polished cross-platform installers. Like `create-react-app` but for MCP servers.
+Scaffold production-ready MCP servers for **any domain** — with polished cross-platform installers that guide your users through setup.
 
-Every generated project gets:
-- One-liner install (`curl | bash` / `irm | iex`)
-- Interactive stack selection with time/disk estimates
-- Incremental ingestion with progress bars
-- Auto-detection and configuration of AI clients
-- Background auto-refresh in the MCP server
+You define your data sources. easyMCP generates a complete, standalone project that includes everything your users need to install and run it: interactive prompts, progress bars, time estimates, and auto-configuration of AI clients. One command to scaffold. One command for your users to install.
 
-## Quick start
+## What easyMCP does
 
-```bash
-# Python users
-uvx easymcp init
+easyMCP is a project generator. You answer a few questions — project name, language, data sources — and it outputs a complete MCP server project with:
 
-# Node.js users
-npx easymcp init
+**For you (the builder):**
+- A working MCP server, REST API, and ingestion pipeline — ready to customize
+- Python (FastMCP + ChromaDB + FastAPI) or Node.js (@modelcontextprotocol/sdk + ChromaDB + Express)
+- All the boilerplate: `pyproject.toml` / `package.json`, `.env`, `.gitignore`, `LICENSE`, `README`
+
+**For your users (the installers):**
+- `curl | bash` / `irm | iex` one-liner install scripts
+- A cross-platform interactive installer (`installer.py`) with:
+  - ANSI colors with Windows support
+  - Interactive stack selection — "Install all / Skip / Choose individually"
+  - Live time and disk estimates per repo (fetched from GitHub API in parallel)
+  - Review loop before committing
+  - Progress bars during embedding
+  - Auto-detection and configuration of Claude Desktop and Claude Code
+  - Incremental re-ingestion (only re-embeds files that changed)
+  - Smart rerun detection (existing install becomes update flow)
+
+The generated project is **standalone** — no runtime dependency on easyMCP. Push it to GitHub and your users install with a one-liner.
+
+## Install
+
+**As a Claude Code plugin (recommended):**
+
+```
+Install this plugin: https://github.com/Percona-Lab/easymcp
 ```
 
-The interactive prompts walk you through creating a new MCP project:
+Then ask Claude: "Create a new MCP server for my docs"
 
-1. **Project name** and description
-2. **Language** — Python (FastMCP + ChromaDB) or Node.js (@modelcontextprotocol/sdk)
-3. **GitHub repo URL** — where the generated project will live
-4. **Data sources** — define stacks of git repos with docs
-5. **Auto-refresh interval** — how often to check for updates
+**Or download the plugin zip** from the [latest release](https://github.com/Percona-Lab/easymcp/releases/latest) and extract to `~/.claude/plugins/easymcp/`
 
-Then scaffolds a complete project directory, ready to push to GitHub.
+**Or run the CLI directly:**
+
+```bash
+curl -fsSL -o /tmp/easymcp.whl \
+  https://github.com/Percona-Lab/easymcp/releases/latest/download/easymcp-0.1.0-py3-none-any.whl
+uvx --from /tmp/easymcp.whl easymcp init
+```
+
+Requires [uv](https://docs.astral.sh/uv/). Install with: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ## What gets generated
 
@@ -37,9 +57,7 @@ acme-docs/
   install-acme-docs.ps1      # PowerShell bootstrap (irm|iex one-liner)
   installer.py               # Cross-platform interactive installer (stdlib only)
   README.md                  # With install instructions, MCP config examples
-  LICENSE
-  .gitignore
-  .env.example
+  LICENSE, .gitignore, .env.example
 
   # Python template:
   pyproject.toml
@@ -58,26 +76,9 @@ acme-docs/
     source-registry.js        # Source suggestions
 ```
 
-## Installer UX
-
-Every generated installer includes:
-
-- **ANSI colors** with Windows ctypes support
-- **Interactive prompts** with defaults and EOF handling
-- **Parallel GitHub API fetching** with rate limit detection and hardcoded fallbacks
-- **Stack selection UI** — "Install all / Skip / Choose individually" with time/disk estimates
-- **Review loop** — total estimate, "Modify selection?"
-- **Progress bar** during embedding
-- **Incremental re-ingestion** via SHA256 file hashes
-- **Smart rerun detection** — existing install becomes update flow
-- **AI client auto-detection** — Claude Desktop, Claude Code
-- **Cross-platform** — macOS, Linux, Windows
-
 ## How it works
 
-easyMCP itself is a Python CLI distributed via PyPI. Node.js users get a thin npm wrapper that auto-installs `uv` and delegates to the Python CLI.
-
-Generated projects are **standalone** — no runtime dependency on easyMCP. The scaffolded code is self-contained and hackable.
+easyMCP is a Python CLI distributed as a wheel via [GitHub releases](https://github.com/Percona-Lab/easymcp/releases). It's also available as a Claude Code plugin through the [Percona claude-plugins marketplace](https://github.com/Percona-Lab/claude-plugins).
 
 Templates use Jinja2 with alternate delimiters (`<% %>` for blocks, `<< >>` for variables) to avoid conflicts with Python `{}` and JavaScript template literals.
 
@@ -96,23 +97,7 @@ easymcp/
     common/                   # Shared: installer, README, LICENSE, etc.
     python/                   # Python-specific templates
     nodejs/                   # Node.js-specific templates
-  npm-wrapper/                # Thin npx bridge
-    package.json
-    bin/easymcp.js
 ```
-
-## Publishing
-
-Tag a release to publish to both PyPI and npm:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-This triggers GitHub Actions workflows that publish:
-- **PyPI**: `easymcp` package (enables `uvx easymcp init`)
-- **npm**: `easymcp` package (enables `npx easymcp init`)
 
 ## License
 
