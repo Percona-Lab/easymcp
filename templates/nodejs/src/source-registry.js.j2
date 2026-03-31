@@ -1,0 +1,72 @@
+/**
+ * << project_name >> — Source Registry
+ *
+ * Maps known doc repos to product keywords for suggesting
+ * unconfigured repos when search results are weak.
+ */
+
+import { config } from "dotenv";
+config();
+
+// All known doc repos and the keywords that indicate relevance.
+const KNOWN_REPOS = {
+<% for source in all_sources %>
+  "<< source.slug >>": [
+<% for kw in source.keywords %>
+    "<< kw >>",
+<% endfor %>
+  ],
+<% endfor %>
+};
+
+function getConfiguredRepos() {
+  const raw = process.env.REPOS || "";
+  return new Set(
+    raw
+      .split(",")
+      .map((r) => r.trim())
+      .filter(Boolean)
+  );
+}
+
+/**
+ * Check if the query matches a known but unconfigured repo.
+ *
+ * Uses a two-tier message: softer when existing results are decent,
+ * stronger when results are weak or missing.
+ *
+ * @param {string} query - The user's search query.
+ * @param {number} maxScore - The highest relevance score from search results (0-1).
+ * @returns {string|null} A suggestion string, or null.
+ */
+export function suggestRepos(query, maxScore) {
+  const configured = getConfiguredRepos();
+  const queryLower = query.toLowerCase();
+
+  const suggestions = [];
+  for (const [repo, keywords] of Object.entries(KNOWN_REPOS)) {
+    if (configured.has(repo)) continue;
+    if (keywords.some((kw) => queryLower.includes(kw))) {
+      suggestions.push(repo);
+    }
+  }
+
+  if (suggestions.length === 0) return null;
+
+  const reposStr = suggestions.map((r) => `\`${r}\``).join(", ");
+
+  if (maxScore > 0.6) {
+    return (
+      `\n\n---\n**Note:** The results above mention this topic, but the ` +
+      `primary documentation lives in ${reposStr}, which is not currently ` +
+      `in your configured repos. Add it to REPOS in your .env file and ` +
+      `run \`npm run ingest\` for more complete results.`
+    );
+  } else {
+    return (
+      `\n\n---\n**Tip:** Your query may be relevant to ${reposStr}, ` +
+      `which is not currently in your configured repos. ` +
+      `Add it to REPOS in your .env file and run \`npm run ingest\` to index it.`
+    );
+  }
+}

@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "easymcp"
+version = "0.1.0"
+description = "Scaffold production-ready MCP servers with polished cross-platform installers"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Percona", email = "info@percona.com" },
+]
+keywords = ["mcp", "model-context-protocol", "scaffolding", "cli", "ai-tools"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Code Generators",
+]
+
+[project.urls]
+Homepage = "https://github.com/Percona-Lab/easymcp"
+Repository = "https://github.com/Percona-Lab/easymcp"
+Issues = "https://github.com/Percona-Lab/easymcp/issues"
+
+dependencies = [
+    "click>=8.0",
+    "jinja2>=3.0",
+]
+
+[project.scripts]
+easymcp = "easymcp.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/easymcp"]
+
+[tool.hatch.build.targets.wheel.shared-data]
+"templates" = "easymcp/templates"

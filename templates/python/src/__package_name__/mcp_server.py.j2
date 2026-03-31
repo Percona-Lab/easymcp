@@ -1,0 +1,204 @@
+"""
+<< project_name >> — MCP Server
+
+Exposes search and document retrieval as MCP tools,
+consumable by Claude Desktop, Claude Code, Cursor, or any MCP client.
+"""
+
+import os
+import logging
+import threading
+import time
+from pathlib import Path
+
+import chromadb
+from dotenv import load_dotenv
+from fastmcp import FastMCP
+
+# Try to load .env from multiple locations so the server works
+# regardless of working directory (e.g. when launched by Claude Desktop).
+_pkg_dir = Path(__file__).resolve().parent.parent.parent  # repo root
+_env_dir = Path.cwd()  # default; updated if we find an actual .env
+for _candidate in [Path.cwd() / ".env", _pkg_dir / ".env"]:
+    if _candidate.is_file():
+        _env_dir = _candidate.parent
+        load_dotenv(_candidate)
+        break
+else:
+    load_dotenv()  # fallback: default dotenv behavior
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Configuration (shared with ingest.py / server.py)
+# ---------------------------------------------------------------------------
+_raw_data = os.getenv("DATA_DIR", "data")
+_data_path = Path(_raw_data)
+# Resolve relative paths against the .env location, not __file__ parent,
+# so the server works after `pip install .` (where __file__ is in site-packages).
+DATA_DIR = (_env_dir / _data_path).resolve() if not _data_path.is_absolute() else _data_path.resolve()
+REPOS_DIR = DATA_DIR / "repos"
+CHROMA_DIR = DATA_DIR / "chroma"
+COLLECTION_NAME = "<< project_slug >>_docs"
+REFRESH_DAYS = int(os.getenv("REFRESH_DAYS", "<< refresh_days >>"))
+LAST_INGEST_FILE = DATA_DIR / ".last_ingest"
+
+
+# ---------------------------------------------------------------------------
+# Auto-refresh: re-ingest if data is stale
+# ---------------------------------------------------------------------------
+
+def _days_since_last_ingest() -> float | None:
+    """Return days since last ingestion, or None if never ingested."""
+    if not LAST_INGEST_FILE.exists():
+        if not CHROMA_DIR.exists():
+            return None
+        mtime = CHROMA_DIR.stat().st_mtime
+    else:
+        mtime = LAST_INGEST_FILE.stat().st_mtime
+    return (time.time() - mtime) / 86400
+
+
+def _background_refresh():
+    """Run ingestion in background thread so MCP server starts immediately."""
+    try:
+        from << package_name >>.ingest import ingest
+        log.info("Auto-refresh: starting background ingestion (data is >%d days old)", REFRESH_DAYS)
+        result = ingest()
+        log.info("Auto-refresh complete: %d added, %d removed, %d total",
+                 result.get("chunks_added", 0), result.get("chunks_deleted", 0),
+                 result.get("collection_count", 0))
+    except Exception:
+        log.exception("Auto-refresh failed (will retry next startup)")
+
+
+def _maybe_refresh():
+    """Check if data is stale and kick off background refresh if needed."""
+    days = _days_since_last_ingest()
+    if days is None:
+        log.info("No ingested data found — run '<< project_slug >>-ingest' first")
+        return
+    if days > REFRESH_DAYS:
+        log.info("Data is %.1f days old (threshold: %d) — refreshing in background", days, REFRESH_DAYS)
+        thread = threading.Thread(target=_background_refresh, daemon=True)
+        thread.start()
+    else:
+        log.info("Data is %.1f days old (threshold: %d) — fresh enough", days, REFRESH_DAYS)
+
+
+# ---------------------------------------------------------------------------
+# MCP Server
+# ---------------------------------------------------------------------------
+mcp = FastMCP(
+    "<< project_name >>",
+    instructions="Search and retrieve documentation indexed by << project_name >>. "
+    "Use this when you need accurate, up-to-date information from the "
+    "configured documentation sources.",
+)
+
+
+def _get_collection() -> chromadb.Collection:
+    client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+    return client.get_collection(COLLECTION_NAME)
+
+
+@mcp.tool()
+def search_docs(query: str, top_k: int = 5) -> str:
+    """Search documentation using semantic search.
+
+    Use this tool when you need to find information from the indexed
+    documentation, including configuration, troubleshooting, features,
+    or best practices. Returns the most relevant documentation chunks
+    with source links.
+
+    Args:
+        query: Natural language search query.
+        top_k: Number of results to return (1-20, default 5).
+    """
+    top_k = max(1, min(top_k, 20))
+    collection = _get_collection()
+
+    results = collection.query(query_texts=[query], n_results=top_k)
+
+    if not results["documents"] or not results["documents"][0]:
+        from << package_name >>.source_registry import suggest_repos
+        suggestion = suggest_repos(query, 0.0)
+        msg = "No results found for your query."
+        if suggestion:
+            msg += suggestion
+        return msg
+
+    output_parts: list[str] = []
+    for i, (doc, meta, dist) in enumerate(
+        zip(results["documents"][0], results["metadatas"][0], results["distances"][0])
+    ):
+        score = round(1.0 - dist / 2.0, 4)
+        output_parts.append(
+            f"### Result {i + 1} (relevance: {score})\n"
+            f"**Source:** {meta['source_repo']} — `{meta['file_path']}`\n"
+            f"**Section:** {meta['heading_hierarchy']}\n"
+            f"**URL:** {meta['page_url']}\n\n"
+            f"{doc}\n"
+        )
+
+    log.info("MCP search: %r → %d results", query[:80], len(output_parts))
+
+    output = "\n---\n".join(output_parts)
+
+    # Check if the query might match an unconfigured repo
+    max_score = max(
+        (round(1.0 - d / 2.0, 4) for d in results["distances"][0]),
+        default=0.0,
+    )
+    from << package_name >>.source_registry import suggest_repos
+    suggestion = suggest_repos(query, max_score)
+    if suggestion:
+        output += suggestion
+
+    return output
+
+
+@mcp.tool()
+def get_doc(repo: str, path: str) -> str:
+    """Retrieve the full Markdown content of a specific documentation page.
+
+    Use this tool when you already know which doc page you need (e.g., from
+    a previous search result) and want to read the complete content.
+
+    Args:
+        repo: Repository short name, e.g. 'my-docs'.
+        path: File path within the repo, e.g. 'docs/getting-started.md'.
+    """
+    repo_dir = None
+    for candidate in REPOS_DIR.iterdir():
+        if candidate.is_dir() and repo in candidate.name:
+            repo_dir = candidate
+            break
+
+    if repo_dir is None:
+        return f"Error: Repo '{repo}' not found in ingested repos."
+
+    file_path = repo_dir / path
+    if not file_path.exists() or not file_path.is_file():
+        return f"Error: Document '{path}' not found in repo '{repo}'."
+
+    try:
+        file_path.resolve().relative_to(repo_dir.resolve())
+    except ValueError:
+        return "Error: Invalid path."
+
+    return file_path.read_text(encoding="utf-8", errors="replace")
+
+
+def main():
+    """CLI entrypoint for << project_slug >>-mcp."""
+    _maybe_refresh()
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,163 @@
+#!/usr/bin/env node
+/**
+ * << project_name >> — API Server
+ *
+ * Express service exposing semantic search and document retrieval
+ * over the ingested documentation corpus.
+ */
+
+import express from "express";
+import { ChromaClient } from "chromadb";
+import { config } from "dotenv";
+import { existsSync, readFileSync, readdirSync } from "fs";
+import { resolve, join } from "path";
+
+// Load .env
+const envPath = process.env.DOTENV_PATH || ".env";
+config({ path: envPath });
+
+const DATA_DIR = resolve(process.env.DATA_DIR || "data");
+const REPOS_DIR = join(DATA_DIR, "repos");
+const CHROMA_DIR = join(DATA_DIR, "chroma");
+const COLLECTION_NAME = "<< project_slug >>_docs";
+
+const app = express();
+app.use(express.json());
+
+const startupTime = Date.now();
+
+async function getCollection() {
+  const client = new ChromaClient({ path: CHROMA_DIR });
+  return client.getCollection({ name: COLLECTION_NAME });
+}
+
+// ---------------------------------------------------------------------------
+// Endpoints
+// ---------------------------------------------------------------------------
+
+app.post("/search", async (req, res) => {
+  try {
+    const { query, top_k = 5 } = req.body;
+    if (!query) return res.status(400).json({ error: "query is required" });
+
+    const k = Math.max(1, Math.min(top_k, 50));
+    const collection = await getCollection();
+    const results = await collection.query({ queryTexts: [query], nResults: k });
+
+    const items = [];
+    if (results.documents && results.documents[0]) {
+      for (let i = 0; i < results.documents[0].length; i++) {
+        const doc = results.documents[0][i];
+        const meta = results.metadatas[0][i];
+        const dist = results.distances[0][i];
+        const score = Math.round((1.0 - dist / 2.0) * 10000) / 10000;
+        items.push({
+          text: doc,
+          source_repo: meta.source_repo,
+          file_path: meta.file_path,
+          heading_hierarchy: meta.heading_hierarchy,
+          page_url: meta.page_url,
+          score,
+        });
+      }
+    }
+
+    // Check for unconfigured repo suggestions
+    const maxScore = items.length > 0 ? Math.max(...items.map((r) => r.score)) : 0;
+    const { suggestRepos } = await import("./source-registry.js");
+    const suggestion = suggestRepos(query, maxScore);
+
+    res.json({ query, results: items, suggestion });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/document/:repo/*", (req, res) => {
+  const repo = req.params.repo;
+  const docPath = req.params[0];
+
+  if (!existsSync(REPOS_DIR)) {
+    return res.status(404).json({ error: "No repos directory found" });
+  }
+
+  let repoDir = null;
+  for (const dir of readdirSync(REPOS_DIR)) {
+    if (dir.includes(repo)) {
+      repoDir = join(REPOS_DIR, dir);
+      break;
+    }
+  }
+
+  if (!repoDir) {
+    return res
+      .status(404)
+      .json({ error: `Repo '${repo}' not found in ingested repos` });
+  }
+
+  const filePath = join(repoDir, docPath);
+
+  // Security: ensure path doesn't escape repo dir
+  if (!resolve(filePath).startsWith(resolve(repoDir))) {
+    return res.status(400).json({ error: "Invalid path" });
+  }
+
+  if (!existsSync(filePath)) {
+    return res
+      .status(404)
+      .json({ error: `Document '${docPath}' not found in repo '${repo}'` });
+  }
+
+  const content = readFileSync(filePath, "utf-8");
+  res.json({ repo, path: docPath, content });
+});
+
+app.get("/health", async (_req, res) => {
+  let docCount = 0;
+  try {
+    const collection = await getCollection();
+    docCount = await collection.count();
+  } catch (_) {}
+
+  const uptimeSeconds = Math.round((Date.now() - startupTime) / 1000 * 10) / 10;
+  res.json({ status: "ok", doc_count: docCount, uptime_seconds: uptimeSeconds });
+});
+
+app.get("/stats", async (_req, res) => {
+  try {
+    const collection = await getCollection();
+    const total = await collection.count();
+    const allMeta = await collection.get({ include: ["metadatas"] });
+    const repoCounts = {};
+    for (const meta of allMeta.metadatas) {
+      const repo = meta.source_repo || "unknown";
+      repoCounts[repo] = (repoCounts[repo] || 0) + 1;
+    }
+
+    const ingestedRepos = [];
+    if (existsSync(REPOS_DIR)) {
+      for (const d of readdirSync(REPOS_DIR).sort()) {
+        if (existsSync(join(REPOS_DIR, d, ".git"))) {
+          ingestedRepos.push(d);
+        }
+      }
+    }
+
+    res.json({
+      total_chunks: total,
+      chunks_per_repo: repoCounts,
+      ingested_repos: ingestedRepos,
+    });
+  } catch (_) {
+    res.json({ total_chunks: 0, repos: {} });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+
+const PORT = parseInt(process.env.PORT || "8000", 10);
+app.listen(PORT, () => {
+  console.log(`<< project_name >> API server running on http://0.0.0.0:${PORT}`);
+});

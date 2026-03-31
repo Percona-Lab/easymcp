@@ -1,0 +1,421 @@
+#!/usr/bin/env node
+/**
+ * << project_name >> — Ingestion Pipeline
+ *
+ * Clones doc repos from GitHub, parses Markdown source files,
+ * chunks by h2/h3 headings, and loads into ChromaDB for semantic search.
+ *
+ * Supports incremental re-ingestion: on subsequent runs, only files whose
+ * content changed since the last ingest are re-chunked and re-embedded.
+ */
+
+import { ChromaClient } from "chromadb";
+import { config } from "dotenv";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  readdirSync,
+  statSync,
+} from "fs";
+import { createHash } from "crypto";
+import { resolve, join, relative, extname } from "path";
+import simpleGit from "simple-git";
+
+// Load .env
+const envPath = process.env.DOTENV_PATH || ".env";
+config({ path: envPath });
+
+const DATA_DIR = resolve(process.env.DATA_DIR || "data");
+const REPOS_DIR = join(DATA_DIR, "repos");
+const CHROMA_DIR = join(DATA_DIR, "chroma");
+const COLLECTION_NAME = "<< project_slug >>_docs";
+const FILES_MARKER = join(DATA_DIR, ".last_ingest_files.json");
+const MAX_CHUNK_CHARS = 4000;
+
+const DEFAULT_REPOS = (process.env.REPOS || "<< all_sources[0].slug if all_sources else 'example/docs' >>")
+  .split(",")
+  .map((r) => r.trim())
+  .filter(Boolean);
+
+const INTERACTIVE = process.stdout.isTTY;
+
+// ---------------------------------------------------------------------------
+// Repo cloning / pulling
+// ---------------------------------------------------------------------------
+
+async function cloneOrPull(repoSlug) {
+  const repoUrl = `https://github.com/${repoSlug}.git`;
+  const localPath = join(REPOS_DIR, repoSlug.replace("/", "_"));
+
+  try {
+    if (existsSync(join(localPath, ".git"))) {
+      if (INTERACTIVE) process.stdout.write(`  Pulling ${repoSlug}...\r`);
+      const git = simpleGit(localPath);
+      await git.pull();
+    } else {
+      if (INTERACTIVE) process.stdout.write(`  Cloning ${repoSlug}...\r`);
+      mkdirSync(localPath, { recursive: true });
+      await simpleGit().clone(repoUrl, localPath, ["--depth", "1"]);
+    }
+  } catch (err) {
+    const msg = err.message.toLowerCase();
+    if (msg.includes("not found")) {
+      console.error(`\n  ! Repo not found: ${repoSlug}`);
+      console.error(
+        `    The repository https://github.com/${repoSlug} does not exist.`
+      );
+      console.error(
+        `    Check the repo name in your .env file and remove or correct it.\n`
+      );
+    } else {
+      console.error(`\n  ! Could not clone ${repoSlug}: ${err.message}\n`);
+    }
+    return null;
+  }
+
+  return localPath;
+}
+
+// ---------------------------------------------------------------------------
+// Markdown chunking
+// ---------------------------------------------------------------------------
+
+const HEADING_RE = /^(#{1,3})\s+(.+)$/gm;
+
+function buildPageUrl(repoSlug, filePath) {
+  // Default: GitHub blob link — customize for your docs site
+  return `https://github.com/${repoSlug}/blob/main/${filePath}`;
+}
+
+function chunkMarkdown(text, repoSlug, filePath) {
+  const headings = [];
+  let match;
+  HEADING_RE.lastIndex = 0;
+  while ((match = HEADING_RE.exec(text)) !== null) {
+    headings.push({
+      pos: match.index,
+      level: match[1].length,
+      title: match[2].trim(),
+    });
+  }
+
+  if (headings.length === 0) {
+    const stripped = text.trim();
+    if (!stripped) return [];
+    return [
+      {
+        text: stripped.slice(0, MAX_CHUNK_CHARS),
+        source_repo: repoSlug,
+        file_path: filePath,
+        heading_hierarchy: [],
+        page_url: buildPageUrl(repoSlug, filePath),
+      },
+    ];
+  }
+
+  const chunks = [];
+  let hierarchy = [];
+
+  for (let i = 0; i < headings.length; i++) {
+    const { pos, level, title } = headings[i];
+    const end = i + 1 < headings.length ? headings[i + 1].pos : text.length;
+    const sectionText = text.slice(pos, end).trim();
+    if (!sectionText) continue;
+
+    hierarchy = hierarchy.filter((_, j) => j < level - 1);
+    while (hierarchy.length < level - 1) hierarchy.push("");
+    hierarchy = hierarchy.slice(0, level - 1).concat([title]);
+
+    chunks.push({
+      text: sectionText.slice(0, MAX_CHUNK_CHARS),
+      source_repo: repoSlug,
+      file_path: filePath,
+      heading_hierarchy: [...hierarchy],
+      page_url: buildPageUrl(repoSlug, filePath),
+    });
+  }
+
+  // Content before the first heading
+  const preText = text.slice(0, headings[0].pos).trim();
+  if (preText) {
+    chunks.unshift({
+      text: preText.slice(0, MAX_CHUNK_CHARS),
+      source_repo: repoSlug,
+      file_path: filePath,
+      heading_hierarchy: [],
+      page_url: buildPageUrl(repoSlug, filePath),
+    });
+  }
+
+  return chunks;
+}
+
+// ---------------------------------------------------------------------------
+// Walk repo
+// ---------------------------------------------------------------------------
+
+function walkMdFiles(dir) {
+  const results = [];
+  function walk(d) {
+    for (const entry of readdirSync(d, { withFileTypes: true })) {
+      if (entry.name.startsWith(".")) continue;
+      const full = join(d, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (extname(entry.name) === ".md") results.push(full);
+    }
+  }
+  walk(dir);
+  return results.sort();
+}
+
+function collectChunks(repoSlug, repoPath) {
+  const mdFiles = walkMdFiles(repoPath);
+  const allChunks = [];
+  for (const mdFile of mdFiles) {
+    const relPath = relative(repoPath, mdFile);
+    const text = readFileSync(mdFile, "utf-8");
+    allChunks.push(...chunkMarkdown(text, repoSlug, relPath));
+  }
+  return allChunks;
+}
+
+function scanFileHashes(repoSlug, repoPath) {
+  const hashes = {};
+  for (const mdFile of walkMdFiles(repoPath)) {
+    const relPath = relative(repoPath, mdFile);
+    const content = readFileSync(mdFile);
+    hashes[relPath] = createHash("sha256").update(content).digest("hex");
+  }
+  return hashes;
+}
+
+// ---------------------------------------------------------------------------
+// Progress bar
+// ---------------------------------------------------------------------------
+
+function bar(current, total, width = 35) {
+  const filled = total ? Math.min(Math.floor((width * current) / total), width) : width;
+  const b =
+    "=".repeat(filled) +
+    (filled < width ? ">" : "") +
+    " ".repeat(Math.max(0, width - filled - (filled < width ? 1 : 0)));
+  const pct = total ? Math.floor((100 * current) / total) : 100;
+  return `[${b}] ${String(pct).padStart(3)}%  ${current}/${total}`;
+}
+
+// ---------------------------------------------------------------------------
+// ChromaDB helpers
+// ---------------------------------------------------------------------------
+
+async function getCollection(create = false) {
+  const client = new ChromaClient({ path: CHROMA_DIR });
+  if (create) {
+    return client.getOrCreateCollection({
+      name: COLLECTION_NAME,
+      metadata: { "hnsw:space": "cosine" },
+    });
+  }
+  return client.getCollection({ name: COLLECTION_NAME });
+}
+
+async function upsertChunks(collection, chunks, label = "") {
+  const seenIds = new Set();
+  const ids = [];
+  const documents = [];
+  const metadatas = [];
+
+  for (const chunk of chunks) {
+    const chunkId = createHash("sha256")
+      .update(`${chunk.source_repo}:${chunk.file_path}:${chunk.text.slice(0, 500)}`)
+      .digest("hex");
+    if (seenIds.has(chunkId)) continue;
+    seenIds.add(chunkId);
+    ids.push(chunkId);
+    documents.push(chunk.text);
+    metadatas.push({
+      source_repo: chunk.source_repo,
+      file_path: chunk.file_path,
+      heading_hierarchy: chunk.heading_hierarchy.join(" > "),
+      page_url: chunk.page_url,
+    });
+  }
+
+  const batchSize = 500;
+  const total = ids.length;
+  for (let i = 0; i < total; i += batchSize) {
+    const end = Math.min(i + batchSize, total);
+    if (INTERACTIVE) {
+      process.stdout.write(`\r  ${bar(end, total)}  ${label}`);
+    }
+    await collection.upsert({
+      ids: ids.slice(i, end),
+      documents: documents.slice(i, end),
+      metadatas: metadatas.slice(i, end),
+    });
+  }
+
+  if (INTERACTIVE && total > 0) {
+    process.stdout.write(`\r  ${bar(total, total)}  done\n`);
+  }
+
+  return total;
+}
+
+// ---------------------------------------------------------------------------
+// Main ingestion
+// ---------------------------------------------------------------------------
+
+export async function ingest(repos = null) {
+  repos = repos || DEFAULT_REPOS;
+  const totalRepos = repos.length;
+
+  // Load stored file hashes
+  let storedHashes = {};
+  if (existsSync(FILES_MARKER)) {
+    try {
+      storedHashes = JSON.parse(readFileSync(FILES_MARKER, "utf-8"));
+    } catch (_) {}
+  }
+
+  let collection;
+  let collectionExists;
+  try {
+    collection = await getCollection(false);
+    collectionExists = true;
+  } catch (_) {
+    collection = await getCollection(true);
+    collectionExists = false;
+  }
+
+  const newHashes = {};
+  let totalAdded = 0;
+  let totalDeleted = 0;
+
+  for (let idx = 0; idx < repos.length; idx++) {
+    const repoSlug = repos[idx];
+    const num = idx + 1;
+
+    if (INTERACTIVE) {
+      process.stdout.write(`  [${num}/${totalRepos}] ${repoSlug} ...\r`);
+    }
+
+    const repoPath = await cloneOrPull(repoSlug);
+    if (!repoPath) continue;
+
+    const currentHashes = scanFileHashes(repoSlug, repoPath);
+    newHashes[repoSlug] = currentHashes;
+    const repoStored = storedHashes[repoSlug] || {};
+
+    const changed = Object.entries(currentHashes)
+      .filter(([p, h]) => repoStored[p] !== h)
+      .map(([p]) => p);
+    const deleted = Object.keys(repoStored).filter(
+      (p) => !(p in currentHashes)
+    );
+
+    if (collectionExists && Object.keys(repoStored).length > 0) {
+      if (changed.length === 0 && deleted.length === 0) {
+        if (INTERACTIVE) {
+          process.stdout.write(
+            `  [${num}/${totalRepos}] ${repoSlug}  (no changes)\n`
+          );
+        }
+        continue;
+      }
+
+      if (INTERACTIVE) {
+        process.stdout.write(
+          `  [${num}/${totalRepos}] ${repoSlug}  (${changed.length} changed, ${deleted.length} deleted)\n`
+        );
+      }
+
+      // Delete stale chunks
+      for (const fp of [...deleted, ...changed]) {
+        try {
+          const results = await collection.get({
+            where: {
+              $and: [
+                { source_repo: { $eq: repoSlug } },
+                { file_path: { $eq: fp } },
+              ],
+            },
+          });
+          if (results.ids.length > 0) {
+            await collection.delete({ ids: results.ids });
+            totalDeleted += results.ids.length;
+          }
+        } catch (_) {}
+      }
+
+      // Re-chunk changed files
+      const chunks = [];
+      for (const fp of changed) {
+        const fullPath = join(repoPath, fp);
+        if (existsSync(fullPath)) {
+          const text = readFileSync(fullPath, "utf-8");
+          chunks.push(...chunkMarkdown(text, repoSlug, fp));
+        }
+      }
+
+      if (chunks.length > 0) {
+        if (INTERACTIVE) {
+          console.log(
+            `  Embedding ${chunks.length} updated chunks (${repoSlug})...`
+          );
+        }
+        totalAdded += await upsertChunks(collection, chunks, repoSlug);
+      }
+    } else {
+      // Full ingest
+      if (INTERACTIVE) {
+        process.stdout.write(
+          `  [${num}/${totalRepos}] ${repoSlug}  (new - full ingest)\n`
+        );
+      }
+      const chunks = collectChunks(repoSlug, repoPath);
+      if (chunks.length > 0) {
+        if (INTERACTIVE) {
+          console.log(
+            `  Embedding ${chunks.length} chunks (${repoSlug})...`
+          );
+        }
+        totalAdded += await upsertChunks(collection, chunks, repoSlug);
+      }
+    }
+  }
+
+  // Persist hashes
+  const mergedHashes = { ...storedHashes, ...newHashes };
+  mkdirSync(DATA_DIR, { recursive: true });
+  writeFileSync(FILES_MARKER, JSON.stringify(mergedHashes));
+
+  // Write timestamp
+  writeFileSync(join(DATA_DIR, ".last_ingest"), String(Date.now() / 1000));
+
+  const count = await collection.count();
+  return {
+    repos,
+    chunksAdded: totalAdded,
+    chunksDeleted: totalDeleted,
+    collectionCount: count,
+  };
+}
+
+// CLI entrypoint
+if (
+  process.argv[1] &&
+  resolve(process.argv[1]) === resolve(import.meta.url.replace("file://", ""))
+) {
+  ingest()
+    .then((result) => {
+      console.log(
+        `\nIngestion complete: ${result.chunksAdded} added, ${result.chunksDeleted} removed - ${result.collectionCount} chunks total`
+      );
+    })
+    .catch((err) => {
+      console.error("Ingestion failed:", err);
+      process.exit(1);
+    });
+}

@@ -1,0 +1,274 @@
+#!/usr/bin/env node
+/**
+ * << project_name >> — MCP Server
+ *
+ * Exposes search and document retrieval as MCP tools,
+ * consumable by Claude Desktop, Claude Code, Cursor, or any MCP client.
+ */
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+import { ChromaClient } from "chromadb";
+import { config } from "dotenv";
+import { existsSync, statSync, readFileSync, readdirSync } from "fs";
+import { resolve, join } from "path";
+
+// Load .env
+const envPath = process.env.DOTENV_PATH || ".env";
+config({ path: envPath });
+
+const DATA_DIR = resolve(process.env.DATA_DIR || "data");
+const REPOS_DIR = join(DATA_DIR, "repos");
+const CHROMA_DIR = join(DATA_DIR, "chroma");
+const COLLECTION_NAME = "<< project_slug >>_docs";
+const REFRESH_DAYS = parseInt(process.env.REFRESH_DAYS || "<< refresh_days >>", 10);
+
+// ---------------------------------------------------------------------------
+// Auto-refresh
+// ---------------------------------------------------------------------------
+
+function daysSinceLastIngest() {
+  const marker = join(DATA_DIR, ".last_ingest");
+  if (existsSync(marker)) {
+    const mtime = statSync(marker).mtimeMs;
+    return (Date.now() - mtime) / 86400000;
+  }
+  if (!existsSync(CHROMA_DIR)) return null;
+  const mtime = statSync(CHROMA_DIR).mtimeMs;
+  return (Date.now() - mtime) / 86400000;
+}
+
+async function maybeRefresh() {
+  const days = daysSinceLastIngest();
+  if (days === null) {
+    console.error(`No ingested data found — run '<< project_slug >>-ingest' first`);
+    return;
+  }
+  if (days > REFRESH_DAYS) {
+    console.error(
+      `Data is ${days.toFixed(1)} days old (threshold: ${REFRESH_DAYS}) — refreshing in background`
+    );
+    // Fire and forget
+    import("./ingest.js")
+      .then((m) => m.ingest())
+      .then((result) =>
+        console.error(
+          `Auto-refresh complete: ${result.chunksAdded} added, ${result.chunksDeleted} removed`
+        )
+      )
+      .catch((err) => console.error("Auto-refresh failed:", err.message));
+  } else {
+    console.error(
+      `Data is ${days.toFixed(1)} days old (threshold: ${REFRESH_DAYS}) — fresh enough`
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ChromaDB
+// ---------------------------------------------------------------------------
+
+async function getCollection() {
+  const client = new ChromaClient({ path: CHROMA_DIR });
+  return client.getCollection({ name: COLLECTION_NAME });
+}
+
+// ---------------------------------------------------------------------------
+// Source suggestions
+// ---------------------------------------------------------------------------
+
+import { suggestRepos } from "./source-registry.js";
+
+// ---------------------------------------------------------------------------
+// MCP Server
+// ---------------------------------------------------------------------------
+
+const server = new Server(
+  { name: "<< project_name >>", version: "0.1.0" },
+  { capabilities: { tools: {} } }
+);
+
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [
+    {
+      name: "search_docs",
+      description:
+        "Search documentation using semantic search. Returns the most relevant " +
+        "documentation chunks with source links.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description: "Natural language search query.",
+          },
+          top_k: {
+            type: "number",
+            description: "Number of results to return (1-20, default 5).",
+            default: 5,
+          },
+        },
+        required: ["query"],
+      },
+    },
+    {
+      name: "get_doc",
+      description:
+        "Retrieve the full Markdown content of a specific documentation page.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          repo: {
+            type: "string",
+            description: "Repository short name, e.g. 'my-docs'.",
+          },
+          path: {
+            type: "string",
+            description:
+              "File path within the repo, e.g. 'docs/getting-started.md'.",
+          },
+        },
+        required: ["repo", "path"],
+      },
+    },
+  ],
+}));
+
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  const { name, arguments: args } = request.params;
+
+  if (name === "search_docs") {
+    const query = args.query;
+    const topK = Math.max(1, Math.min(args.top_k || 5, 20));
+
+    try {
+      const collection = await getCollection();
+      const results = await collection.query({
+        queryTexts: [query],
+        nResults: topK,
+      });
+
+      if (
+        !results.documents ||
+        !results.documents[0] ||
+        results.documents[0].length === 0
+      ) {
+        const suggestion = suggestRepos(query, 0.0);
+        let msg = "No results found for your query.";
+        if (suggestion) msg += suggestion;
+        return { content: [{ type: "text", text: msg }] };
+      }
+
+      const parts = [];
+      let maxScore = 0;
+      for (let i = 0; i < results.documents[0].length; i++) {
+        const doc = results.documents[0][i];
+        const meta = results.metadatas[0][i];
+        const dist = results.distances[0][i];
+        const score = Math.round((1.0 - dist / 2.0) * 10000) / 10000;
+        if (score > maxScore) maxScore = score;
+
+        parts.push(
+          `### Result ${i + 1} (relevance: ${score})\n` +
+            `**Source:** ${meta.source_repo} — \`${meta.file_path}\`\n` +
+            `**Section:** ${meta.heading_hierarchy}\n` +
+            `**URL:** ${meta.page_url}\n\n` +
+            `${doc}\n`
+        );
+      }
+
+      let output = parts.join("\n---\n");
+      const suggestion = suggestRepos(query, maxScore);
+      if (suggestion) output += suggestion;
+
+      return { content: [{ type: "text", text: output }] };
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `Error searching: ${err.message}` }],
+        isError: true,
+      };
+    }
+  }
+
+  if (name === "get_doc") {
+    const { repo, path: docPath } = args;
+
+    if (!existsSync(REPOS_DIR)) {
+      return {
+        content: [{ type: "text", text: "Error: No repos directory found." }],
+        isError: true,
+      };
+    }
+
+    // Find matching repo dir
+    let repoDir = null;
+    for (const dir of readdirSync(REPOS_DIR)) {
+      if (dir.includes(repo)) {
+        repoDir = join(REPOS_DIR, dir);
+        break;
+      }
+    }
+
+    if (!repoDir) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error: Repo '${repo}' not found in ingested repos.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const filePath = join(repoDir, docPath);
+
+    // Security: ensure path doesn't escape repo dir
+    if (!resolve(filePath).startsWith(resolve(repoDir))) {
+      return {
+        content: [{ type: "text", text: "Error: Invalid path." }],
+        isError: true,
+      };
+    }
+
+    if (!existsSync(filePath)) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error: Document '${docPath}' not found in repo '${repo}'.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    const content = readFileSync(filePath, "utf-8");
+    return { content: [{ type: "text", text: content }] };
+  }
+
+  return {
+    content: [{ type: "text", text: `Unknown tool: ${name}` }],
+    isError: true,
+  };
+});
+
+// ---------------------------------------------------------------------------
+// Start
+// ---------------------------------------------------------------------------
+
+async function main() {
+  await maybeRefresh();
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error("<< project_name >> MCP server running on stdio");
+}
+
+main().catch((err) => {
+  console.error("Fatal:", err);
+  process.exit(1);
+});

@@ -1,0 +1,113 @@
+# << project_name >>
+
+<< description >>
+
+## Supported tools
+
+| Tool | Connection |
+|------|-----------|
+| Claude Desktop | MCP (auto-configured by installer) |
+| Claude Code | MCP (auto-configured by installer) |
+| Cursor | MCP config |
+| Windsurf | MCP config |
+| Any MCP client | `<< package_name >>.mcp_server` |
+| Any HTTP client | REST API on port 8000 |
+
+## Quick start
+
+**macOS / Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/<< github_repo_url | replace('https://github.com/', '') >>/main/install-<< project_slug >> | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/<< github_repo_url | replace('https://github.com/', '') >>/main/install-<< project_slug >>.ps1 | iex
+```
+
+The installer will:
+- Install [uv](https://docs.astral.sh/uv/) if needed
+- Clone this repository
+- Create a Python virtual environment
+- Let you choose which documentation stacks to index
+- Embed selected docs into a local ChromaDB vector store
+- Auto-configure Claude Desktop and Claude Code
+
+## Available repos
+
+| Stack | Repos |
+|-------|-------|
+<% for stack in stacks %>
+| **<< stack.name >>** | <% for source in stack.sources %>`<< source.slug >>`<% if not loop.last %>, <% endif %><% endfor %> |
+<% endfor %>
+
+## Manual MCP configuration
+
+If the installer didn't auto-configure your client, add this to your MCP config:
+
+```json
+{
+  "<< project_slug >>": {
+    "command": "/path/to/<< project_slug >>/.venv/bin/python",
+    "args": ["-m", "<< package_name >>.mcp_server"],
+    "env": {
+      "DOTENV_PATH": "/path/to/<< project_slug >>/.env"
+    }
+  }
+}
+```
+
+## Keeping docs up to date
+
+The MCP server automatically checks for doc updates on startup. Configure in `.env`:
+
+```
+REFRESH_DAYS=<< refresh_days >>   # check every N days (0 to disable)
+```
+
+To manually refresh:
+```bash
+cd ~/<< project_slug >>
+.venv/bin/<< project_slug >>-ingest
+```
+
+## REST API
+
+Start the API server:
+```bash
+cd ~/<< project_slug >>
+.venv/bin/<< project_slug >>-server
+```
+
+Search:
+```bash
+curl -X POST http://localhost:8000/search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "your search query", "top_k": 5}'
+```
+
+## How it works
+
+1. **Ingest** — clones configured GitHub repos and parses Markdown docs
+2. **Embed** — chunks by heading, embeds into ChromaDB (local, all-MiniLM-L6-v2)
+3. **Search** — semantic search via MCP tools or REST API
+4. **Suggest** — recommends unconfigured repos when results are weak
+
+## Project structure
+
+```
+<< project_slug >>/
+  install-<< project_slug >>      # Bash bootstrap (curl|bash)
+  install-<< project_slug >>.ps1  # PowerShell bootstrap (irm|iex)
+  installer.py                     # Cross-platform interactive installer
+  pyproject.toml
+  src/<< package_name >>/
+    mcp_server.py                  # FastMCP server with auto-refresh
+    ingest.py                      # Incremental ingestion pipeline
+    server.py                      # FastAPI REST API
+    source_registry.py             # Keyword-based source suggestions
+```
+
+## License
+
+<< license >>
