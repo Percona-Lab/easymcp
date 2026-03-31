@@ -25,9 +25,11 @@ In Claude Code, say:
 Install this plugin: https://github.com/Percona-Lab/CAIRN
 ```
 
+Or download [`cairn-plugin.zip`](https://github.com/Percona-Lab/CAIRN/releases/latest/download/cairn-plugin.zip) from the latest release and upload it via Claude Code's plugin installer.
+
 Then ask Claude: "Create a new MCP server" or "Scaffold an API integration for Slack"
 
-**Or download and run the CLI directly:**
+**Or run the CLI directly:**
 
 ```bash
 curl -fsSL -o /tmp/cairn.whl \
