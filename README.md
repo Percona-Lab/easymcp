@@ -18,21 +18,15 @@ CAIRN generates complete, standalone MCP server projects. You pick a project typ
 
 ## Install
 
-**As a Claude Code plugin (recommended):**
-
-```
-Install this plugin: https://github.com/Percona-Lab/claude-plugins
-```
-
-Then ask Claude: "Create a new MCP server" or "Scaffold an API integration for Slack"
-
-**Or download and run directly:**
+**Download and run:**
 
 ```bash
 curl -fsSL -o /tmp/cairn.whl \
   https://github.com/Percona-Lab/CAIRN/releases/latest/download/cairn_mcp-0.2.0-py3-none-any.whl
 uvx --from /tmp/cairn.whl cairn init
 ```
+
+Requires [uv](https://docs.astral.sh/uv/). Install with: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 ## What gets generated
 
