@@ -22,11 +22,6 @@ classifiers = [
     "Topic :: Software Development :: Code Generators",
 ]
 
-[project.urls]
-Homepage = "https://github.com/Percona-Lab/easymcp"
-Repository = "https://github.com/Percona-Lab/easymcp"
-Issues = "https://github.com/Percona-Lab/easymcp/issues"
-
 dependencies = [
     "click>=8.0",
     "jinja2>=3.0",
@@ -35,8 +30,16 @@ dependencies = [
 [project.scripts]
 easymcp = "easymcp.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/Percona-Lab/easymcp"
+Repository = "https://github.com/Percona-Lab/easymcp"
+Issues = "https://github.com/Percona-Lab/easymcp/issues"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/easymcp"]
 
-[tool.hatch.build.targets.wheel.shared-data]
+[tool.hatch.build.targets.wheel.force-include]
 "templates" = "easymcp/templates"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/easymcp", "templates", "README.md", "LICENSE"]

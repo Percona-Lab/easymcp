@@ -1,0 +1,23 @@
+{
+  "name": "easymcp",
+  "version": "0.1.0",
+  "description": "Scaffold production-ready MCP servers with polished cross-platform installers",
+  "keywords": ["mcp", "model-context-protocol", "scaffolding", "cli", "ai-tools"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Percona-Lab/easymcp.git",
+    "directory": "npm-wrapper"
+  },
+  "homepage": "https://github.com/Percona-Lab/easymcp",
+  "bugs": "https://github.com/Percona-Lab/easymcp/issues",
+  "bin": {
+    "easymcp": "bin/easymcp.js"
+  },
+  "files": [
+    "bin/easymcp.js"
+  ],
+  "engines": {
+    "node": ">=16"
+  }
+}
