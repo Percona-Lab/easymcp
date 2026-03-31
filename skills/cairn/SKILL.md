@@ -66,13 +66,27 @@ Smallest possible starting point for custom MCP servers.
 
 ### Option 1: Download and run the CLI (recommended)
 
+**Before running the CLI, check if `uv` is installed:**
+
+```bash
+which uv || command -v uv
+```
+
+If `uv` is not found, install it first:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Then source the shell profile (or restart the shell) so `uvx` is on PATH.
+
+**Then run the CLI:**
+
 ```bash
 curl -fsSL -o /tmp/cairn.whl \
   https://github.com/Percona-Lab/CAIRN/releases/latest/download/cairn_mcp-0.2.0-py3-none-any.whl
 uvx --from /tmp/cairn.whl cairn init
 ```
-
-If `uv` is not installed: `curl -LsSf https://astral.sh/uv/install.sh | sh`
 
 The CLI prompts for:
 1. **Project type** — API integration, Doc search, or Starter
