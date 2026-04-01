@@ -536,8 +536,12 @@ def get_claude_desktop_config_path() -> Path | None:
     return None
 
 
-def get_claude_code_config_path() -> Path:
+def get_claude_code_settings_path() -> Path:
     return Path.home() / ".claude" / "settings.json"
+
+
+def get_claude_code_cli_config_path() -> Path:
+    return Path.home() / ".claude.json"
 
 
 def build_mcp_entry(install_dir: Path) -> dict:
@@ -628,17 +632,23 @@ def configure_ai_clients(install_dir: Path) -> bool:
                 if configure_claude_desktop(desktop_path, install_dir):
                     any_configured = True
 
-    # Claude Code
-    code_path = get_claude_code_config_path()
-    if code_path.parent.exists():
-        info("Claude Code detected - auto-configuring...")
-        if configure_claude_code(code_path, install_dir):
+    # Claude Code — settings.json (read by Claude Code at runtime)
+    code_settings_path = get_claude_code_settings_path()
+    if code_settings_path.parent.exists():
+        info("Claude Code detected - auto-configuring settings.json...")
+        if configure_claude_code(code_settings_path, install_dir):
             any_configured = True
     else:
-        print(f"  {DIM}Claude Code not detected ({code_path.parent}){NC}")
+        print(f"  {DIM}Claude Code not detected ({code_settings_path.parent}){NC}")
         if ask_yn("Configure Claude Code MCP anyway?", default=False):
-            if configure_claude_code(code_path, install_dir):
+            if configure_claude_code(code_settings_path, install_dir):
                 any_configured = True
+
+    # Claude Code — ~/.claude.json (used by `claude mcp list` and CLI)
+    cli_config_path = get_claude_code_cli_config_path()
+    if configure_claude_code(cli_config_path, install_dir):
+        info(f"Configured Claude Code CLI: {cli_config_path}")
+        any_configured = True
 
     print()
     return any_configured
