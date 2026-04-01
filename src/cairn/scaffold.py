@@ -92,9 +92,16 @@ def scaffold(config: dict, output_dir: Path) -> None:
     print(c(BOLD, "Next steps:"))
     print(f"  1. cd {output_dir}")
     print(f"  2. Review and customize the generated code")
-    print(f"  3. git init && git add -A && git commit -m 'Initial scaffold from CAIRN'")
-    print(f"  4. Push to {github}")
+    if language == "nodejs":
+        print(f"  3. npm install && npm run build")
+        print(f"  4. git init && git add -A && git commit -m 'Initial scaffold from CAIRN'")
+        print(f"  5. Push to {github}")
+        step = 6
+    else:
+        print(f"  3. git init && git add -A && git commit -m 'Initial scaffold from CAIRN'")
+        print(f"  4. Push to {github}")
+        step = 5
     if project_type == "doc-search":
-        print(f"  5. Users install with:")
+        print(f"  {step}. Users install with:")
         print(f"     {DIM}curl -fsSL https://raw.githubusercontent.com/.../install-{slug} | bash{NC}")
     print()
