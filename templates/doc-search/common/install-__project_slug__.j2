@@ -35,4 +35,4 @@ echo "  Downloading installer..."
 curl -fsSL "$INSTALLER_URL" -o "$TMPDIR/installer.py"
 
 echo ""
-uv run --python 3.12 "$TMPDIR/installer.py"
+uv run --python 3.12 "$TMPDIR/installer.py" < /dev/tty
