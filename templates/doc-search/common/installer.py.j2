@@ -741,6 +741,11 @@ def print_done(any_clients_configured: bool) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # When run via `curl | bash`, stdin is the pipe, not the terminal.
+    # Reopen stdin from /dev/tty so input() prompts work interactively.
+    if not sys.stdin.isatty():
+        sys.stdin = open("/dev/tty")
+
     print_banner()
 
     # Step 2: Prerequisites
