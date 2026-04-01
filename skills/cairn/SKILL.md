@@ -112,5 +112,51 @@ Tell the user their next steps:
 2. **API integration:** Implement the TODO methods in `connector.py` / `connector.js`
 3. **Doc search:** Customize `source_registry.py` keywords and `_build_page_url()` URL pattern
 4. **Starter:** Add more `@mcp.tool()` functions
-5. `git init && git add -A && git commit -m "Initial scaffold from CAIRN"`
-6. Push to GitHub
+5. **Node.js projects:** Run `npm install && npm run build` to bundle `dist/`
+6. `git init && git add -A && git commit -m "Initial scaffold from CAIRN"`
+7. Push to GitHub
+
+---
+
+## Node.js Bundling
+
+Node.js projects use esbuild to bundle all dependencies into self-contained
+files in `dist/`. This is critical because Claude Desktop and other MCP hosts
+launch servers without setting `cwd` to the project directory, so
+`node_modules` won't be found at runtime. The bundled `dist/` output has
+zero runtime dependencies and should be committed to git.
+
+- `npm run build` — bundles `src/` → `dist/` with all deps inlined
+- `npm run dev` — runs source directly (requires `node_modules`)
+- `npm run mcp` — runs the bundled server
+
+---
+
+## Installing in Claude Desktop
+
+After building, the MCP server must be registered in **both** config
+locations to be available everywhere:
+
+### 1. Claude Code CLI (`~/.claude.json`)
+
+```bash
+claude mcp add <name> -- node /absolute/path/to/dist/mcp-server.js
+```
+
+### 2. Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`)
+
+Add an entry to the `mcpServers` object:
+
+```json
+{
+  "mcpServers": {
+    "<name>": {
+      "command": "node",
+      "args": ["/absolute/path/to/dist/mcp-server.js"]
+    }
+  }
+}
+```
+
+The server will appear under **Desktop** in the Connectors panel with a
+**LOCAL DEV** badge. Restart Claude Desktop after editing the config.
