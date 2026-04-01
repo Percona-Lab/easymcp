@@ -2,15 +2,14 @@
 # << project_name >> Installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/<< github_repo_url | replace('https://github.com/', '') >>/main/install-<< project_slug >> | bash
 
-set -e
+set -euo pipefail
+
+# NOTE: Do NOT use `exec bash <(curl ...) </dev/tty` to fix interactive prompts.
+# That pattern is unreliable across shells and terminal types. Instead, this
+# bootstrap stays non-interactive and delegates all prompts to the Python
+# installer where input() handles terminal I/O correctly.
 
 INSTALLER_URL="https://raw.githubusercontent.com/<< github_repo_url | replace('https://github.com/', '') >>/main/installer.py"
-
-# When piped from curl, bash stdin is the pipe — not the terminal.
-# Re-exec with /dev/tty so interactive prompts work.
-if [ ! -t 0 ]; then
-  exec bash <(curl -fsSL "https://raw.githubusercontent.com/<< github_repo_url | replace('https://github.com/', '') >>/main/install-<< project_slug >>") </dev/tty
-fi
 
 echo ""
 echo "<< project_name >> Installer"
@@ -20,10 +19,9 @@ echo ""
 if ! command -v uv &>/dev/null; then
   echo "  Installing uv..."
   curl -LsSf https://astral.sh/uv/install.sh | sh
-  # Add uv to PATH for this session
   export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
   if ! command -v uv &>/dev/null; then
-    echo "  uv installed but not in PATH. Please restart your shell and re-run this installer."
+    echo "  uv installed but not in PATH. Restart your shell and re-run."
     exit 1
   fi
   echo "  uv installed."
@@ -36,6 +34,5 @@ trap 'rm -rf "$TMPDIR"' EXIT
 echo "  Downloading installer..."
 curl -fsSL "$INSTALLER_URL" -o "$TMPDIR/installer.py"
 
-echo "  Starting installer..."
 echo ""
 uv run --python 3.12 "$TMPDIR/installer.py"
