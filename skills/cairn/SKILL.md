@@ -218,5 +218,11 @@ These are real bugs discovered in production MCP servers built with CAIRN.
 - **ALWAYS** preserve existing keys when adding an `mcpServers` entry (use `config.setdefault("mcpServers", {})`, don't replace the whole file).
 - When a config file can't be parsed as JSON, prompt: "Could not parse {path}. Overwrite? (y/N)"
 
+### Credential safety
+- **NEVER** pass passwords, API keys, or secrets as inline environment variables or command arguments in terminal commands. They are displayed in plain text in terminal output, scrollback history, and logs.
+- **NEVER** hardcode credentials in generated source files. Always use `.env` files or environment variables injected by the MCP host config.
+- When testing connections, read credentials from the config file (e.g., `settings.json`, `.env`) via a script — never echo them.
+- Installers that prompt for passwords should use `getpass.getpass()` instead of `input()` to avoid displaying the password on screen.
+
 ### Elasticsearch version pinning
 - Pin `elasticsearch>=8.0.0,<9.0.0` — v9 has breaking changes in the Python client API.
