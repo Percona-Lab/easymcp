@@ -540,10 +540,6 @@ def get_claude_code_settings_path() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
 
-def get_claude_code_cli_config_path() -> Path:
-    return Path.home() / ".claude.json"
-
-
 def build_mcp_entry(install_dir: Path) -> dict:
     env_path = install_dir / ".env"
 <% if language == "python" %>
@@ -579,7 +575,9 @@ def configure_claude_desktop(config_path: Path, install_dir: Path) -> bool:
         try:
             config = json.loads(config_path.read_text())
         except json.JSONDecodeError:
-            warn(f"Could not parse {config_path} - will overwrite.")
+            warn(f"Could not parse {config_path}.")
+            if not ask_yn(f"Overwrite {config_path}?", default=False):
+                return False
 
     config.setdefault("mcpServers", {})
     config["mcpServers"]["<< project_slug >>"] = build_mcp_entry(install_dir)
@@ -604,7 +602,9 @@ def configure_claude_code(config_path: Path, install_dir: Path) -> bool:
         try:
             config = json.loads(config_path.read_text())
         except json.JSONDecodeError:
-            warn(f"Could not parse {config_path} - will overwrite.")
+            warn(f"Could not parse {config_path}.")
+            if not ask_yn(f"Overwrite {config_path}?", default=False):
+                return False
 
     config.setdefault("mcpServers", {})
     config["mcpServers"]["<< project_slug >>"] = build_mcp_entry(install_dir)
@@ -643,12 +643,6 @@ def configure_ai_clients(install_dir: Path) -> bool:
         if ask_yn("Configure Claude Code MCP anyway?", default=False):
             if configure_claude_code(code_settings_path, install_dir):
                 any_configured = True
-
-    # Claude Code — ~/.claude.json (used by `claude mcp list` and CLI)
-    cli_config_path = get_claude_code_cli_config_path()
-    if configure_claude_code(cli_config_path, install_dir):
-        info(f"Configured Claude Code CLI: {cli_config_path}")
-        any_configured = True
 
     print()
     return any_configured

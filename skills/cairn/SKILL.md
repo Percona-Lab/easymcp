@@ -7,8 +7,9 @@ description: >
   tool, or start a minimal MCP project. Trigger phrases: "create an MCP
   server", "scaffold MCP", "new MCP project", "build an API integration",
   "wrap this API as MCP tools", "like percona-dk but for", "like IBEX but
-  for", "cairn", "scaffold". Three project types: api-integration (wrap
+  for", "cairn", "scaffold". Four project types: api-integration (wrap
   REST APIs as MCP tools), doc-search (semantic search over Markdown repos),
+  data-connector (read-only database/API access with safety guards),
   and starter (minimal MCP server skeleton).
 ---
 
@@ -52,7 +53,27 @@ with stack selection, progress bars, and AI client auto-detection.
 - `installer.py` — Cross-platform interactive installer
 - Bootstrap scripts, `pyproject.toml`, `.env.example`, `README.md`
 
-### 3. Starter
+### 3. Data Connector
+Direct read-only access to databases or APIs (ClickHouse, Elasticsearch,
+PostgreSQL, etc.). Generates a connector class per data source with safety
+guards (read-only enforcement, row limits, query timeouts) and an MCP
+server that exposes query/explore/sample tools. Results formatted as
+Markdown tables for LLM consumption. Based on the vista-data-mcp pattern.
+
+**Generated files (Python):**
+- `{source}_connector.py` — Per-source client with connection, safety, and Markdown formatting
+- `mcp_server.py` — FastMCP server with tools per data source (lazy-loaded, env-gated)
+- `installer.py` — Cross-platform installer with credential prompts + AI client auto-config
+- `pyproject.toml`, `.env.example`, `README.md`, bootstrap script
+
+**Key patterns:**
+- Each data source is optional — tools return "not configured" if env vars are missing
+- Connectors are lazy-loaded (imported only when first called) to avoid import errors
+- Read-only enforcement: allowlist safe statement prefixes, blocklist mutation keywords
+- Results capped at configurable row/hit limits with configurable timeouts
+- `uv run --directory` resolves deps from `pyproject.toml` at runtime (no venv needed for MCP entry)
+
+### 4. Starter
 Minimal MCP server with one example `hello` tool. User fills in the rest.
 Smallest possible starting point for custom MCP servers.
 
@@ -89,12 +110,13 @@ uvx --from /tmp/cairn.whl cairn init
 ```
 
 The CLI prompts for:
-1. **Project type** — API integration, Doc search, or Starter
+1. **Project type** — API integration, Doc search, Data connector, or Starter
 2. **Project name** and description
 3. **Language** — Python (FastMCP) or Node.js (@modelcontextprotocol/sdk)
 4. **Type-specific config:**
    - API integration: service name, base URL, auth method, tool definitions
    - Doc search: stacks (groups of repos), keywords, refresh interval
+   - Data connector: data sources, connection params, read-only query tools
    - Starter: nothing extra
 
 ### Option 2: Guide the user through manual scaffolding
@@ -111,10 +133,11 @@ Tell the user their next steps:
 1. `cd <project-dir>` and review the generated code
 2. **API integration:** Implement the TODO methods in `connector.py` / `connector.js`
 3. **Doc search:** Customize `source_registry.py` keywords and `_build_page_url()` URL pattern
-4. **Starter:** Add more `@mcp.tool()` functions
-5. **Node.js projects:** Run `npm install && npm run build` to bundle `dist/`
-6. `git init && git add -A && git commit -m "Initial scaffold from CAIRN"`
-7. Push to GitHub
+4. **Data connector:** Add query methods to connector classes, tune safety limits
+5. **Starter:** Add more `@mcp.tool()` functions
+6. **Node.js projects:** Run `npm install && npm run build` to bundle `dist/`
+7. `git init && git add -A && git commit -m "Initial scaffold from CAIRN"`
+8. Push to GitHub
 
 ---
 
@@ -132,18 +155,12 @@ zero runtime dependencies and should be committed to git.
 
 ---
 
-## Installing in Claude Desktop
+## Installing in Claude
 
-After building, the MCP server must be registered in **both** config
-locations to be available everywhere:
+After building, the MCP server must be registered in the AI client config
+files. There are two separate configs — update both for full coverage:
 
-### 1. Claude Code CLI (`~/.claude.json`)
-
-```bash
-claude mcp add <name> -- node /absolute/path/to/dist/mcp-server.js
-```
-
-### 2. Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`)
+### 1. Claude Code (`~/.claude/settings.json`)
 
 Add an entry to the `mcpServers` object:
 
@@ -151,12 +168,55 @@ Add an entry to the `mcpServers` object:
 {
   "mcpServers": {
     "<name>": {
-      "command": "node",
-      "args": ["/absolute/path/to/dist/mcp-server.js"]
+      "command": "uv",
+      "args": ["run", "--directory", "/absolute/path/to/project", "mcp_server.py"],
+      "env": { "KEY": "value" }
     }
   }
 }
 ```
 
+Or use the CLI: `claude mcp add <name> -- uv run --directory /path mcp_server.py`
+
+### 2. Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`)
+
+Same `mcpServers` format as above.
+
+**IMPORTANT:** `~/.claude.json` is Claude's internal config (themes, tips,
+etc.) — do NOT write MCP server entries there. MCP config for Claude Code
+goes in `~/.claude/settings.json`.
+
 The server will appear under **Desktop** in the Connectors panel with a
 **LOCAL DEV** badge. Restart Claude Desktop after editing the config.
+
+---
+
+## Common Pitfalls (mandatory reading for scaffolding)
+
+These are real bugs discovered in production MCP servers built with CAIRN.
+**Every scaffolded project must avoid these:**
+
+### Python dependency installation
+- **WRONG:** `uv pip install -e .` — fails without an active venv
+- **RIGHT (option A):** `uv venv .venv && uv pip install -e . --python .venv/bin/python` — creates venv explicitly, then installs into it
+- **RIGHT (option B):** `uv sync` — creates `.venv` and installs all deps from `pyproject.toml` in one command
+- **RIGHT (option C):** Skip install entirely. Use `uv run --directory <path> mcp_server.py` as the MCP entry — this auto-resolves deps from `pyproject.toml` at runtime with no venv needed
+
+### FastMCP constructor
+- **WRONG:** `FastMCP("name", description="...")` — `description` was renamed
+- **RIGHT:** `FastMCP("name", instructions="...")` — use `instructions=` parameter
+- This changed in mcp[cli] >= 1.2.0. Always use `instructions=`.
+
+### Claude config file locations
+- `~/.claude/settings.json` — MCP servers for **Claude Code** (has `mcpServers` key)
+- `~/Library/Application Support/Claude/claude_desktop_config.json` — MCP servers for **Claude Desktop**
+- `~/.claude.json` — Claude's **internal config** (themes, tips, telemetry). **NEVER write MCP entries here.**
+- Installers should configure `settings.json` + `claude_desktop_config.json` only.
+
+### Installer safety
+- **NEVER** silently overwrite a config file that fails to parse. Ask the user first.
+- **ALWAYS** preserve existing keys when adding an `mcpServers` entry (use `config.setdefault("mcpServers", {})`, don't replace the whole file).
+- When a config file can't be parsed as JSON, prompt: "Could not parse {path}. Overwrite? (y/N)"
+
+### Elasticsearch version pinning
+- Pin `elasticsearch>=8.0.0,<9.0.0` — v9 has breaking changes in the Python client API.
