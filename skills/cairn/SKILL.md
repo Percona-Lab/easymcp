@@ -22,6 +22,46 @@ Release: https://github.com/Percona-Lab/CAIRN/releases/latest
 
 ---
 
+## Security Doctrine (MANDATORY — read before generating ANY code)
+
+These rules are non-negotiable. Every MCP server scaffolded by CAIRN MUST follow them.
+Violating any rule means the generated project is broken and must be fixed before delivery.
+
+### 1. Credentials NEVER leave the local machine
+
+- **NEVER** put secrets (passwords, API keys, tokens) in MCP config JSON files (`settings.json`, `claude_desktop_config.json`). These files are synced, logged, and displayed in plain text in Claude Desktop's developer settings UI. Secrets placed here are transmitted to Claude/Anthropic servers.
+- **NEVER** pass secrets as inline environment variables or command arguments in terminal commands. They appear in terminal output, shell history, process listings, and logs.
+- **NEVER** hardcode secrets in generated source files.
+
+### 2. The DOTENV_PATH pattern is the ONLY acceptable credential flow
+
+All credentials MUST be stored in a `.env` file with restricted permissions, and only the path to that file is passed in MCP config:
+
+```json
+{
+  "command": "/absolute/path/to/uv",
+  "args": ["run", "--directory", "/path/to/project", "mcp_server.py"],
+  "env": {"DOTENV_PATH": "/path/to/project/.env"}
+}
+```
+
+The MCP server reads credentials from `.env` at startup. The `.env` file:
+- MUST have mode `0o600` (owner read/write only)
+- MUST be in `.gitignore`
+- MUST NOT be committed to version control
+
+### 3. Password prompts MUST be hidden
+
+Installers that prompt for passwords or secrets MUST use `getpass.getpass()`, never `input()`. The `input()` function echoes characters to the terminal in plain text.
+
+### 4. Commands MUST use absolute paths
+
+Claude Desktop and other MCP hosts run with a restricted PATH that typically does not include `~/.local/bin`, `~/.cargo/bin`, or Homebrew paths. All generated MCP config entries MUST resolve the full absolute path to the command binary (e.g., `/Users/dk/.local/bin/uv`, not `uv`).
+
+Installers MUST include a `resolve_command_path()` function that finds the absolute path via `which`/`shutil.which` with fallback to common install locations.
+
+---
+
 ## Project Types
 
 ### 1. API Integration
@@ -158,7 +198,10 @@ zero runtime dependencies and should be committed to git.
 ## Installing in Claude
 
 After building, the MCP server must be registered in the AI client config
-files. There are two separate configs — update both for full coverage:
+files. There are two separate configs — update both for full coverage.
+
+**IMPORTANT: Follow the Security Doctrine above.** Never put credentials
+in these config files. Only `DOTENV_PATH` goes in `env`.
 
 ### 1. Claude Code (`~/.claude/settings.json`)
 
@@ -168,19 +211,20 @@ Add an entry to the `mcpServers` object:
 {
   "mcpServers": {
     "<name>": {
-      "command": "uv",
+      "command": "/absolute/path/to/uv",
       "args": ["run", "--directory", "/absolute/path/to/project", "mcp_server.py"],
-      "env": { "KEY": "value" }
+      "env": { "DOTENV_PATH": "/absolute/path/to/project/.env" }
     }
   }
 }
 ```
 
-Or use the CLI: `claude mcp add <name> -- uv run --directory /path mcp_server.py`
+Or use the CLI: `claude mcp add <name> -- /absolute/path/to/uv run --directory /path mcp_server.py`
 
 ### 2. Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`)
 
-Same `mcpServers` format as above.
+Same `mcpServers` format as above. Use absolute paths for the command — Claude Desktop
+has a restricted PATH and cannot find `uv`, `node`, or `python` without full paths.
 
 **IMPORTANT:** `~/.claude.json` is Claude's internal config (themes, tips,
 etc.) — do NOT write MCP server entries there. MCP config for Claude Code
@@ -218,11 +262,13 @@ These are real bugs discovered in production MCP servers built with CAIRN.
 - **ALWAYS** preserve existing keys when adding an `mcpServers` entry (use `config.setdefault("mcpServers", {})`, don't replace the whole file).
 - When a config file can't be parsed as JSON, prompt: "Could not parse {path}. Overwrite? (y/N)"
 
-### Credential safety
+### Credential safety (see Security Doctrine above)
+- **NEVER** put credentials in MCP config JSON files — they are displayed in Claude Desktop's developer settings UI and may be synced to Anthropic servers. Use the DOTENV_PATH pattern instead.
 - **NEVER** pass passwords, API keys, or secrets as inline environment variables or command arguments in terminal commands. They are displayed in plain text in terminal output, scrollback history, and logs.
-- **NEVER** hardcode credentials in generated source files. Always use `.env` files or environment variables injected by the MCP host config.
-- When testing connections, read credentials from the config file (e.g., `settings.json`, `.env`) via a script — never echo them.
-- Installers that prompt for passwords should use `getpass.getpass()` instead of `input()` to avoid displaying the password on screen.
+- **NEVER** hardcode credentials in generated source files.
+- The `.env` file MUST have mode `0o600` and be in `.gitignore`.
+- Installers that prompt for passwords MUST use `getpass.getpass()` instead of `input()`.
+- MCP server `mcp_server.py` MUST load credentials from `DOTENV_PATH` at startup (see Security Doctrine for the pattern).
 
 ### Elasticsearch version pinning
 - Pin `elasticsearch>=8.0.0,<9.0.0` — v9 has breaking changes in the Python client API.
