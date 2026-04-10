@@ -92,6 +92,66 @@ In the Clari Copilot build, the connector was written by guessing endpoints, aut
 
 ---
 
+## Remote Proxy Doctrine (MANDATORY for servers with remote/SSE mode)
+
+When an MCP server supports both local and remote modes (proxying tool calls to a shared server via SSE), these rules are non-negotiable. They were proven by the vista-data-mcp and relay-bridge (Clari Copilot) deployments.
+
+### 1. Startup must NEVER contact the remote server
+
+The local MCP server must start and register all tools instantly, even off VPN. Connection to the remote is LAZY — only attempted when a tool is actually invoked. This is why we do NOT use `uvx mcp-proxy <remote_url>` — it crashes at startup if DNS can't resolve the remote host, causing Claude Desktop to show "Server disconnected" before the user even tries anything.
+
+### 2. Both modes run the same local server
+
+The MCP config entry must ALWAYS be:
+```json
+{
+  "command": "/absolute/path/to/uv",
+  "args": ["run", "--directory", "/path/to/project", "mcp_server.py"],
+  "env": { "REMOTE_SSE_URL": "http://host:port/sse" }
+}
+```
+or for local mode:
+```json
+{
+  "command": "/absolute/path/to/uv",
+  "args": ["run", "--directory", "/path/to/project", "mcp_server.py"],
+  "env": { "DOTENV_PATH": "/path/to/project/.env" }
+}
+```
+
+NEVER use `uvx mcp-proxy <remote_url>` as the MCP entry. Both modes run the same local Python server — the only difference is the env var that controls the data path.
+
+### 3. Connection errors must return friendly markdown, never crash
+
+Every tool must catch all exceptions from the remote call. DNS failures, timeouts, connection refused — all must return a user-friendly markdown message like:
+
+> **Cannot reach the server.** Connect to Percona VPN and try again.
+
+Never raise, never exit, never let the process die. If the MCP server process exits, Claude Desktop shows "Server disconnected" which confuses users into thinking the installation is broken rather than that they just need VPN.
+
+### 4. The installer clones the repo in BOTH modes
+
+Remote mode is NOT serverless. The installer must `git clone` + `uv sync` (or equivalent) in both remote and local modes, because both modes need the local server code to register tools and act as the proxy. The difference is only:
+- **Remote:** env has `REMOTE_SSE_URL`, no `.env` with credentials
+- **Local:** env has `DOTENV_PATH`, `.env` contains API credentials
+
+### 5. Tool fallback chain
+
+Every tool function must follow this exact pattern:
+```
+1. Check if local credentials are configured → call the API directly
+2. Else check if REMOTE_SSE_URL is set → forward via _call_remote()
+3. Else → return "not configured" message with installer instructions
+```
+
+The `_call_remote()` helper opens an SSE connection, forwards the tool name and arguments, extracts text from the response, and returns it. All wrapped in try/except with VPN-friendly error messages.
+
+### What went wrong without this:
+
+In early iterations, `uvx mcp-proxy` was considered but rejected because it connects to the remote at startup and crashes if the host is unreachable. The lazy-connection pattern (connect only on tool invocation) was proven in vista-data-mcp and adopted identically in relay-bridge. Both servers have been running in production on SHERPA since April 2026.
+
+---
+
 ## Project Types
 
 ### 1. API Integration
@@ -427,6 +487,11 @@ else:
 ```
 
 This requires `python-dotenv` as an explicit dependency in `pyproject.toml`.
+
+### Remote proxy: never use mcp-proxy
+- **WRONG:** `"command": "uvx", "args": ["mcp-proxy", "http://host:port/sse"]` — crashes at startup if DNS fails
+- **RIGHT:** Run the local MCP server with `REMOTE_SSE_URL` env var. The server starts instantly, registers tools, and only connects to the remote lazily per tool call.
+- Claude Desktop kills MCP servers that fail to start and shows "Server disconnected" — this is indistinguishable from a broken install from the user's perspective.
 
 ### Elasticsearch version pinning
 - Pin `elasticsearch>=8.0.0,<9.0.0` — v9 has breaking changes in the Python client API.
