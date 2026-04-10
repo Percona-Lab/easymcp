@@ -1,15 +1,74 @@
 """
 << project_name >> — MCP Server
+
+Supports remote proxy mode via REMOTE_SSE_URL for shared server access.
 """
 
 import logging
+import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from fastmcp import FastMCP
+
+# ── Credential loading (DOTENV_PATH pattern) ──────────────────────
+_pkg_dir = Path(__file__).resolve().parent.parent.parent
+_dotenv_path = os.getenv("DOTENV_PATH", "")
+
+if _dotenv_path and Path(_dotenv_path).is_file():
+    load_dotenv(Path(_dotenv_path))
+else:
+    for _candidate in [Path.cwd() / ".env", _pkg_dir / ".env"]:
+        if _candidate.is_file():
+            load_dotenv(_candidate)
+            break
+    else:
+        load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
 log = logging.getLogger(__name__)
+
+# ── Remote proxy mode ─────────────────────────────────────────────
+_REMOTE_SSE_URL = os.getenv("REMOTE_SSE_URL")
+
+_REMOTE_UNREACHABLE_MSG = (
+    "**Cannot reach the remote << project_name >> server.** Check your network connection and try again.\n\n"
+    "_If you need offline access, re-run the installer and choose Local mode._"
+)
+
+
+async def _call_remote(tool_name: str, arguments: dict) -> str:
+    """Forward a tool call to the remote MCP server via SSE."""
+    from mcp.client.sse import sse_client
+    from mcp import ClientSession
+
+    try:
+        async with sse_client(url=_REMOTE_SSE_URL) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+                if result.content:
+                    parts = [
+                        block.text for block in result.content
+                        if hasattr(block, "text")
+                    ]
+                    return "\n".join(parts) if parts else "No results."
+                return "No results returned."
+    except Exception as e:
+        msg = str(e).lower()
+        if any(k in msg for k in [
+            "nodename", "connecterror", "connect error",
+            "timed out", "connection refused", "unreachable",
+            "name or service not known", "no route to host",
+        ]):
+            return _REMOTE_UNREACHABLE_MSG
+        return f"**Remote query failed:** {type(e).__name__}: {e}"
+
+
+# ── MCP Server ────────────────────────────────────────────────────
 
 mcp = FastMCP(
     "<< project_name >>",
@@ -18,20 +77,31 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-def hello(name: str = "world") -> str:
+async def hello(name: str = "world") -> str:
     """Say hello. Replace this with your own tools.
 
     Args:
         name: Who to greet.
     """
+    # Example: to add remote proxy support to your tools, use this pattern:
+    #
+    # if not _local_configured():
+    #     if _REMOTE_SSE_URL:
+    #         return await _call_remote("hello", {"name": name})
+    #     return "Not configured. Run the installer."
+    #
     return f"Hello, {name}! This is << project_name >>."
 
 
 # Add more tools here:
 #
 # @mcp.tool()
-# def my_tool(param: str) -> str:
+# async def my_tool(param: str) -> str:
 #     """Description of what this tool does."""
+#     if not _local_configured():
+#         if _REMOTE_SSE_URL:
+#             return await _call_remote("my_tool", {"param": param})
+#         return "Not configured."
 #     return "result"
 
 

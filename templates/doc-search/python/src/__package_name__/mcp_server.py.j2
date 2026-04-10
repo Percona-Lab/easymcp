@@ -3,6 +3,7 @@
 
 Exposes search and document retrieval as MCP tools,
 consumable by Claude Desktop, Claude Code, Cursor, or any MCP client.
+Supports remote proxy mode via REMOTE_SSE_URL for shared server access.
 """
 
 import os
@@ -15,17 +16,22 @@ import chromadb
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-# Try to load .env from multiple locations so the server works
-# regardless of working directory (e.g. when launched by Claude Desktop).
+# ── Credential loading (DOTENV_PATH pattern) ──────────────────────
 _pkg_dir = Path(__file__).resolve().parent.parent.parent  # repo root
 _env_dir = Path.cwd()  # default; updated if we find an actual .env
-for _candidate in [Path.cwd() / ".env", _pkg_dir / ".env"]:
-    if _candidate.is_file():
-        _env_dir = _candidate.parent
-        load_dotenv(_candidate)
-        break
+_dotenv_path = os.getenv("DOTENV_PATH", "")
+
+if _dotenv_path and Path(_dotenv_path).is_file():
+    _env_dir = Path(_dotenv_path).parent
+    load_dotenv(Path(_dotenv_path))
 else:
-    load_dotenv()  # fallback: default dotenv behavior
+    for _candidate in [Path.cwd() / ".env", _pkg_dir / ".env"]:
+        if _candidate.is_file():
+            _env_dir = _candidate.parent
+            load_dotenv(_candidate)
+            break
+    else:
+        load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +52,61 @@ CHROMA_DIR = DATA_DIR / "chroma"
 COLLECTION_NAME = "<< project_slug >>_docs"
 REFRESH_DAYS = int(os.getenv("REFRESH_DAYS", "<< refresh_days >>"))
 LAST_INGEST_FILE = DATA_DIR / ".last_ingest"
+
+
+# ---------------------------------------------------------------------------
+# Remote proxy mode
+# ---------------------------------------------------------------------------
+# When REMOTE_SSE_URL is set, tool calls are forwarded to a remote MCP
+# server via SSE. This lets the server start instantly (tools register)
+# even when off network — connection is attempted lazily per tool call.
+
+_REMOTE_SSE_URL = os.getenv("REMOTE_SSE_URL")
+
+_NOT_CONFIGURED_MSG = (
+    "**<< project_name >> not configured.** Run the installer to set up:\n"
+    "```\n"
+    "curl -fsSL https://raw.githubusercontent.com/<< github_repo_url | replace('https://github.com/', '') >>/main/install-<< project_slug >> | bash\n"
+    "```\n"
+)
+
+_REMOTE_UNREACHABLE_MSG = (
+    "**Cannot reach the remote << project_name >> server.** Check your network connection and try again.\n\n"
+    "_If you need offline access, re-run the installer and choose Local mode._"
+)
+
+
+async def _call_remote(tool_name: str, arguments: dict) -> str:
+    """Forward a tool call to the remote MCP server via SSE."""
+    from mcp.client.sse import sse_client
+    from mcp import ClientSession
+
+    try:
+        async with sse_client(url=_REMOTE_SSE_URL) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+                if result.content:
+                    parts = [
+                        block.text for block in result.content
+                        if hasattr(block, "text")
+                    ]
+                    return "\n".join(parts) if parts else "No results."
+                return "No results returned."
+    except Exception as e:
+        msg = str(e).lower()
+        if any(k in msg for k in [
+            "nodename", "connecterror", "connect error",
+            "timed out", "connection refused", "unreachable",
+            "name or service not known", "no route to host",
+        ]):
+            return _REMOTE_UNREACHABLE_MSG
+        return f"**Remote query failed:** {type(e).__name__}: {e}"
+
+
+def _local_configured() -> bool:
+    """Check if local ChromaDB data exists."""
+    return CHROMA_DIR.exists()
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +168,7 @@ def _get_collection() -> chromadb.Collection:
 
 
 @mcp.tool()
-def search_docs(query: str, top_k: int = 5) -> str:
+async def search_docs(query: str, top_k: int = 5) -> str:
     """Search documentation using semantic search.
 
     Use this tool when you need to find information from the indexed
@@ -119,6 +180,11 @@ def search_docs(query: str, top_k: int = 5) -> str:
         query: Natural language search query.
         top_k: Number of results to return (1-20, default 5).
     """
+    if not _local_configured():
+        if _REMOTE_SSE_URL:
+            return await _call_remote("search_docs", {"query": query, "top_k": top_k})
+        return _NOT_CONFIGURED_MSG
+
     top_k = max(1, min(top_k, 20))
     collection = _get_collection()
 
@@ -163,7 +229,7 @@ def search_docs(query: str, top_k: int = 5) -> str:
 
 
 @mcp.tool()
-def get_doc(repo: str, path: str) -> str:
+async def get_doc(repo: str, path: str) -> str:
     """Retrieve the full Markdown content of a specific documentation page.
 
     Use this tool when you already know which doc page you need (e.g., from
@@ -173,6 +239,11 @@ def get_doc(repo: str, path: str) -> str:
         repo: Repository short name, e.g. 'my-docs'.
         path: File path within the repo, e.g. 'docs/getting-started.md'.
     """
+    if not _local_configured():
+        if _REMOTE_SSE_URL:
+            return await _call_remote("get_doc", {"repo": repo, "path": path})
+        return _NOT_CONFIGURED_MSG
+
     repo_dir = None
     for candidate in REPOS_DIR.iterdir():
         if candidate.is_dir() and repo in candidate.name:

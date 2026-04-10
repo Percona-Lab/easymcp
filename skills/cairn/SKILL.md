@@ -231,6 +231,71 @@ zero runtime dependencies and should be committed to git.
 
 ---
 
+## Remote Proxy Mode
+
+All Python MCP server templates include built-in remote proxy support via
+the `REMOTE_SSE_URL` environment variable. This enables a "shared server"
+deployment model where users don't need local credentials.
+
+### How it works
+
+1. Server starts normally — all tools register regardless of config
+2. On tool invocation, the fallback chain is:
+   - **Local credentials configured?** → execute locally
+   - **REMOTE_SSE_URL set?** → forward tool call to remote server via SSE
+   - **Neither?** → return friendly "not configured" message with install instructions
+3. Remote connection is **lazy** — only attempted when a tool is actually called
+4. If the remote server is unreachable (no VPN, etc.), returns a friendly
+   error message instead of crashing
+
+### Installer integration
+
+For project types that include an installer (doc-search, data-connector,
+api-integration), the installer should offer:
+
+```
+Installation mode:
+  1) Remote (shared server) — no credentials needed, requires VPN
+  2) Local (own credentials) — works offline
+```
+
+- **Remote mode:** sets `REMOTE_SSE_URL` in `.env` and the MCP config `env` block
+- **Local mode:** sets `DOTENV_PATH` in the MCP config `env` block (credentials in `.env`)
+- Both modes clone the repo and install dependencies locally
+
+### Key code pattern (from vista-data-mcp)
+
+```python
+_REMOTE_SSE_URL = os.getenv("REMOTE_SSE_URL")
+
+async def _call_remote(tool_name: str, arguments: dict) -> str:
+    from mcp.client.sse import sse_client
+    from mcp import ClientSession
+    try:
+        async with sse_client(url=_REMOTE_SSE_URL) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+                # extract text blocks from result.content
+    except Exception as e:
+        # friendly VPN/network error message
+```
+
+Each tool follows:
+```python
+@mcp.tool()
+async def my_tool(args) -> str:
+    if not _local_configured():
+        if _REMOTE_SSE_URL:
+            return await _call_remote("my_tool", {"args": args})
+        return _NOT_CONFIGURED_MSG
+    # ... normal local execution ...
+```
+
+Requires `mcp>=1.0` in `pyproject.toml` (provides `mcp.client.sse`).
+
+---
+
 ## Installing in Claude
 
 After building, the MCP server must be registered in the AI client config

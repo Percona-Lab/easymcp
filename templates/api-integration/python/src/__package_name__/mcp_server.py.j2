@@ -2,21 +2,30 @@
 << project_name >> — MCP Server
 
 Exposes << service_name >> API operations as MCP tools.
+Supports remote proxy mode via REMOTE_SSE_URL for shared server access.
 """
 
+import json
 import logging
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 
+# ── Credential loading (DOTENV_PATH pattern) ──────────────────────
 _pkg_dir = Path(__file__).resolve().parent.parent.parent
-for _candidate in [Path.cwd() / ".env", _pkg_dir / ".env"]:
-    if _candidate.is_file():
-        load_dotenv(_candidate)
-        break
+_dotenv_path = os.getenv("DOTENV_PATH", "")
+
+if _dotenv_path and Path(_dotenv_path).is_file():
+    load_dotenv(Path(_dotenv_path))
 else:
-    load_dotenv()
+    for _candidate in [Path.cwd() / ".env", _pkg_dir / ".env"]:
+        if _candidate.is_file():
+            load_dotenv(_candidate)
+            break
+    else:
+        load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,9 +33,99 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-from << package_name >>.connector import << service_name | replace(' ', '') >>Connector
+# ── Remote proxy mode ─────────────────────────────────────────────
+# When REMOTE_SSE_URL is set, tool calls are forwarded to a remote MCP
+# server via SSE. This lets the server start instantly (tools register)
+# even when off network — connection is attempted lazily per tool call.
 
-connector = << service_name | replace(' ', '') >>Connector()
+_REMOTE_SSE_URL = os.getenv("REMOTE_SSE_URL")
+
+_NOT_CONFIGURED_MSG = (
+    "**<< service_name >> not configured.** Run the installer to set up credentials:\n"
+    "```\n"
+    "curl -fsSL https://raw.githubusercontent.com/<< github_repo_url | replace('https://github.com/', '') >>/main/install-<< project_slug >> | bash\n"
+    "```\n"
+)
+
+_REMOTE_UNREACHABLE_MSG = (
+    "**Cannot reach the remote << project_name >> server.** Check your network connection and try again.\n\n"
+    "_If you need offline access, re-run the installer and choose Local mode "
+    "with your own credentials._"
+)
+
+
+async def _call_remote(tool_name: str, arguments: dict) -> str:
+    """Forward a tool call to the remote MCP server via SSE."""
+    from mcp.client.sse import sse_client
+    from mcp import ClientSession
+
+    try:
+        async with sse_client(url=_REMOTE_SSE_URL) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                result = await session.call_tool(tool_name, arguments)
+                if result.content:
+                    parts = [
+                        block.text for block in result.content
+                        if hasattr(block, "text")
+                    ]
+                    return "\n".join(parts) if parts else "No results."
+                return "No results returned."
+    except Exception as e:
+        msg = str(e).lower()
+        if any(k in msg for k in [
+            "nodename", "connecterror", "connect error",
+            "timed out", "connection refused", "unreachable",
+            "name or service not known", "no route to host",
+        ]):
+            return _REMOTE_UNREACHABLE_MSG
+        return f"**Remote query failed:** {type(e).__name__}: {e}"
+
+
+def _friendly_error(source: str, e: Exception) -> str:
+    """Return a user-friendly error message based on exception type."""
+    etype = type(e).__name__
+    msg = str(e)
+    if "ConnectionError" in etype or "timed out" in msg.lower():
+        return (
+            f"**{source} connection failed.** Cannot reach the server.\n\n"
+            f"_Technical detail: {etype}: {msg}_"
+        )
+    if "401" in msg or "403" in msg:
+        return (
+            f"**{source} authentication failed.** Check credentials in your .env file.\n\n"
+            f"_Technical detail: {etype}: {msg}_"
+        )
+    return f"**{source} error:** {etype}: {msg}"
+
+
+# ── Local connector (lazy-loaded) ─────────────────────────────────
+
+def _local_configured() -> bool:
+    """Check if local credentials are configured."""
+<% if auth_method == "bearer" %>
+    return bool(os.getenv("<< service_slug | upper >>_API_KEY"))
+<% elif auth_method == "basic" %>
+    return bool(os.getenv("<< service_slug | upper >>_USERNAME"))
+<% elif auth_method == "oauth2" %>
+    return bool(os.getenv("<< service_slug | upper >>_CLIENT_ID"))
+<% else %>
+    return bool(os.getenv("<< service_slug | upper >>_API_KEY"))
+<% endif %>
+
+
+_connector = None
+
+
+def _get_connector():
+    global _connector
+    if _connector is None:
+        from << package_name >>.connector import << service_name | replace(' ', '') >>Connector
+        _connector = << service_name | replace(' ', '') >>Connector()
+    return _connector
+
+
+# ── MCP Server ────────────────────────────────────────────────────
 
 mcp = FastMCP(
     "<< project_name >>",
@@ -37,14 +136,17 @@ mcp = FastMCP(
 <% for tool in tools %>
 
 @mcp.tool()
-def << tool.name >>(**kwargs) -> str:
+async def << tool.name >>(**kwargs) -> str:
     """<< tool.description >>"""
+    if not _local_configured():
+        if _REMOTE_SSE_URL:
+            return await _call_remote("<< tool.name >>", kwargs)
+        return _NOT_CONFIGURED_MSG
     try:
-        result = connector.<< tool.name >>(**kwargs)
-        import json
+        result = _get_connector().<< tool.name >>(**kwargs)
         return json.dumps(result, indent=2, default=str)
     except Exception as e:
-        return f"Error: {e}"
+        return _friendly_error("<< service_name >>", e)
 
 <% endfor %>
 
