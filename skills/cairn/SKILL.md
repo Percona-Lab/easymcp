@@ -356,6 +356,133 @@ Requires `mcp>=1.0` in `pyproject.toml` (provides `mcp.client.sse`).
 
 ---
 
+## MCPB Packaging (One-Click Install for Claude Desktop)
+
+CAIRN-scaffolded MCP servers can be packaged as `.mcpb` files — ZIP bundles
+that Claude Desktop installs with a single drag-and-drop or click. This
+eliminates the need for users to have Python, Node.js, or any dev toolchain.
+
+Spec: https://github.com/modelcontextprotocol/mcpb
+
+### What is a .mcpb file?
+
+A ZIP archive containing:
+```
+my-server.mcpb
+├── manifest.json     ← identity, entry point, config schema, compatibility
+├── server/           ← your MCP server code + vendored dependencies
+│   ├── mcp_server.py (or index.js)
+│   └── ...
+└── icon.png          ← optional
+```
+
+Claude Desktop reads `manifest.json`, prompts the user for any required
+config (API keys via secure input), and launches the server. No terminal,
+no git clone, no pip install.
+
+### manifest.json for CAIRN projects
+
+For a Python MCP server (using `uv` runtime — manifest_version 0.3+):
+
+```json
+{
+  "manifest_version": "0.3",
+  "name": "<project-slug>",
+  "display_name": "<Project Name>",
+  "version": "0.1.0",
+  "description": "<description>",
+  "author": { "name": "<author>" },
+  "license": "MIT",
+  "repository": { "url": "https://github.com/<org>/<repo>" },
+  "server": {
+    "type": "uv",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}/server", "mcp_server.py"],
+      "env": {
+        "DOTENV_PATH": "${__dirname}/server/.env"
+      }
+    }
+  },
+  "user_config": {
+    "api_key": {
+      "type": "string",
+      "title": "API Key",
+      "description": "Your API key for the service",
+      "required": true,
+      "sensitive": true
+    }
+  },
+  "tools": [
+    { "name": "tool_name", "description": "What this tool does" }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": ["darwin", "win32", "linux"]
+  }
+}
+```
+
+For Node.js servers, use `"type": "node"` and bundle with esbuild first.
+
+### Key manifest fields
+
+- **`server.type`**: `"uv"` (Python via uv), `"node"`, `"python"`, or `"binary"`
+- **`server.mcp_config`**: Same `command`/`args`/`env` as Claude config
+- **`${__dirname}`**: Resolves to the bundle's install directory at runtime
+- **`user_config`**: Install-time prompts — `sensitive: true` stores in OS keychain
+- **`tools`**: Static declarations so Claude Desktop shows them before first launch
+- **`compatibility.platforms`**: `["darwin", "win32", "linux"]`
+
+### How to build a .mcpb from a CAIRN project
+
+```bash
+# 1. Build/vendor dependencies
+# Python:
+pip install -t server/vendor -r requirements.txt
+# Or for uv-based: just include pyproject.toml, uv resolves at runtime
+
+# Node.js:
+npm install && npm run build  # esbuild bundles to dist/
+
+# 2. Create manifest.json (see template above)
+
+# 3. Pack
+npx @anthropic-ai/mcpb pack
+
+# 4. Validate
+npx @anthropic-ai/mcpb validate
+
+# 5. Optionally sign
+npx @anthropic-ai/mcpb sign dist/my-server.mcpb
+```
+
+### When to ship .mcpb vs installer
+
+| Audience | Ship |
+|----------|------|
+| Non-technical users, broad distribution | `.mcpb` — drag-and-drop, no terminal needed |
+| Technical users, internal teams | `curl \| bash` installer — more flexible, supports remote proxy mode |
+| GitHub releases | Both — `.mcpb` + installer script + wheel |
+
+### Security notes
+
+MCPB has **no sandbox**. The server runs with full user privileges. Follow
+the Security Doctrine above — credentials go in `user_config` with
+`sensitive: true` (stored in OS keychain), never hardcoded.
+
+### CAIRN integration
+
+When scaffolding a project, CAIRN should generate a `manifest.json` template
+alongside the server code. The `npm run pack` or equivalent script can be
+added to `package.json` / `Makefile` for easy .mcpb builds.
+
+For Python projects using the `uv` server type, the manifest can reference
+`pyproject.toml` directly — `uv` resolves dependencies at runtime, so no
+vendoring step is needed.
+
+---
+
 ## Installing in Claude
 
 After building, the MCP server must be registered in the AI client config
